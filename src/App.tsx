@@ -242,11 +242,13 @@ export default function App() {
   }, [customPhotoUrl]);
 
   // RUN FACE DETECTION ON CURRENT LIVE FEED OR USER PHOTO
-  const runFaceDetection = useCallback(async () => {
-    setAppStage('detecting');
-    setLockedFace(null);
-    setLockedFaceUrl(null);
-    setHighlightedFaceId(null);
+  const runFaceDetection = useCallback(async (silent: boolean = false) => {
+    if (!silent) {
+      setAppStage('detecting');
+      setLockedFace(null);
+      setLockedFaceUrl(null);
+      setHighlightedFaceId(null);
+    }
 
     let faces: DetectedFace[] = [];
 
@@ -263,12 +265,22 @@ export default function App() {
     }));
 
     setDetectedFaces(finalized);
-    setAppStage('ready');
-
-    if (finalized.length > 0) {
-      sound.playScanBeep(0.8);
+    if (!silent) {
+      setAppStage('ready');
+      if (finalized.length > 0) {
+        sound.playScanBeep(0.8);
+      }
     }
   }, [customPhotoUrl, callHistory]);
+
+  // Periodic background check as teacher points camera around classroom
+  useEffect(() => {
+    if (!cameraActive || appStage !== 'ready') return;
+    const interval = setInterval(() => {
+      runFaceDetection(true);
+    }, 2800);
+    return () => clearInterval(interval);
+  }, [cameraActive, appStage, runFaceDetection]);
 
   // Allow teacher to tap on screen to add a face box manually
   const handleTapToCreateFace = (clickX: number, clickY: number) => {
@@ -286,7 +298,12 @@ export default function App() {
 
   // RANDOM PICK FROM DETECTED FACES
   const handleStartPick = () => {
-    if (appStage === 'picking' || detectedFaces.length === 0) return;
+    if (appStage === 'picking') return;
+    if (detectedFaces.length === 0) {
+      sound.playClick();
+      setCameraError('Chưa phát hiện khuôn mặt nào trong khung hình. Vui lòng hướng camera về phía học sinh!');
+      return;
+    }
 
     setAppStage('picking');
     setLockedFace(null);

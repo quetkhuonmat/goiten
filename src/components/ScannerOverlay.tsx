@@ -75,18 +75,40 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
           />
           <span>
             {appStage === 'detecting'
-              ? 'ĐANG QUÉT TÌM KHUÔN MẶT CẢ LỚP...'
+              ? 'ĐANG QUÉT TÌM HỌC SINH...'
               : appStage === 'picking'
               ? 'ĐANG QUAY CHỌN NGẪU NHIÊN...'
               : appStage === 'locked'
               ? 'ĐÃ KHÓA MỤC TIÊU'
-              : `ĐÃ NHẬN DIỆN ${detectedFaces.length} KHUÔN MẶT`}
+              : detectedFaces.length > 0
+              ? `ĐÃ NHẬN DIỆN ${detectedFaces.length} HỌC SINH`
+              : 'CHƯA PHÁT HIỆN KHUÔN MẶT'}
           </span>
         </div>
         <div className="bg-slate-950/80 px-2.5 py-1 rounded border border-cyan-500/30 backdrop-blur-sm">
-          <span>AI VISION · 4K/FHD</span>
+          <span>AI VISION</span>
         </div>
       </div>
+
+      {/* Laser Scanning Line when detecting or picking */}
+      {(appStage === 'detecting' || appStage === 'picking') && (
+        <div className="absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_20px_#06b6d4] animate-laser pointer-events-none" />
+      )}
+
+      {/* Empty State Banner when no faces detected */}
+      {appStage === 'ready' && detectedFaces.length === 0 && (
+        <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 flex flex-col items-center justify-center text-center pointer-events-none">
+          <div className="bg-slate-950/80 border border-cyan-500/40 rounded-2xl p-4 backdrop-blur-md max-w-sm shadow-xl">
+            <div className="text-2xl mb-1.5">👀</div>
+            <div className="font-cyber font-bold text-white text-xs mb-1">
+              CHƯA PHÁT HIỆN KHUÔN MẶT NÀO
+            </div>
+            <div className="text-[11px] text-slate-400 leading-relaxed">
+              Hướng camera về phía học sinh trong lớp, hoặc chạm vào màn hình để chọn vị trí học sinh.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ALL DETECTED FACES (Green/Cyan sci-fi boxes around every student's face) */}
       {detectedFaces.map((face) => {

@@ -1,7 +1,47 @@
 import { DetectedFace } from '../types';
+import { unpackCascade, runCascade, clusterDetections, ClassifierFunction } from './pico';
+
+let faceClassifier: ClassifierFunction | null = null;
+let isLoadingCascade = false;
+
+// Preload the local facefinder binary cascade
+async function initPicoClassifier(): Promise<ClassifierFunction | null> {
+  if (faceClassifier) return faceClassifier;
+  if (isLoadingCascade) return null;
+
+  try {
+    isLoadingCascade = true;
+    const response = await fetch('/facefinder');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const buffer = await response.arrayBuffer();
+    faceClassifier = unpackCascade(new Int8Array(buffer));
+    return faceClassifier;
+  } catch (err) {
+    console.warn('Could not load /facefinder cascade:', err);
+    return null;
+  } finally {
+    isLoadingCascade = false;
+  }
+}
+
+// Convert RGBA to Grayscale
+function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number): Uint8Array {
+  const pixels = new Uint8Array(nrows * ncols);
+  for (let i = 0; i < nrows; i++) {
+    for (let j = 0; j < ncols; j++) {
+      const offset = (i * ncols + j) * 4;
+      pixels[i * ncols + j] =
+        (299 * rgba[offset] + 587 * rgba[offset + 1] + 114 * rgba[offset + 2]) / 1000;
+    }
+  }
+  return pixels;
+}
 
 /**
- * Detect faces from a live video or image element
+ * Detect real human faces from a video or image element
+ * Returns [] (empty array) if no face is present (e.g. pointing at a wall or door).
  */
 export async function detectClassroomFaces(
   source: HTMLVideoElement | HTMLImageElement
@@ -11,7 +51,7 @@ export async function detectClassroomFaces(
 
   if (!width || !height || width <= 10 || height <= 10) return [];
 
-  // 1. Try Native FaceDetector API (available in Chrome Android and Chromium)
+  // 1. Try Native FaceDetector API (standard in Chrome / Android Chrome)
   if ('FaceDetector' in window) {
     try {
       const FaceDetectorClass = (window as unknown as {
@@ -23,38 +63,34 @@ export async function detectClassroomFaces(
       const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 60 });
       const faces = await detector.detect(source);
 
-      if (faces && faces.length > 0) {
-        return faces.map((f, idx) => {
-          const bb = f.boundingBox;
-          return {
-            id: idx + 1,
-            x: Math.max(0, Math.min(95, (bb.x / width) * 100)),
-            y: Math.max(0, Math.min(95, (bb.y / height) * 100)),
-            width: Math.max(6, Math.min(30, (bb.width / width) * 100)),
-            height: Math.max(6, Math.min(35, (bb.height / height) * 100)),
-            called: false,
-          };
-        });
-      }
+      // If FaceDetector exists and returned results (or 0 faces), trust it directly!
+      return faces.map((f, idx) => {
+        const bb = f.boundingBox;
+        return {
+          id: idx + 1,
+          x: Math.max(0, Math.min(95, (bb.x / width) * 100)),
+          y: Math.max(0, Math.min(95, (bb.y / height) * 100)),
+          width: Math.max(5, Math.min(30, (bb.width / width) * 100)),
+          height: Math.max(5, Math.min(35, (bb.height / height) * 100)),
+          called: false,
+        };
+      });
     } catch (err) {
-      console.warn('Native FaceDetector failed, falling back to vision detection:', err);
+      console.warn('Native FaceDetector error, using Pico:', err);
     }
   }
 
-  // 2. Vision analysis: detect skin-tone and contrast regions in the classroom
-  return analyzeClassroomRegions(source, width, height);
-}
+  // 2. Use Pico Face Classifier (100% offline, zero-false-positive on plain walls)
+  const classifier = await initPicoClassifier();
+  if (!classifier) {
+    // If no detector is available and not a real face, return empty (NEVER guess fake boxes!)
+    return [];
+  }
 
-/**
- * Intelligent classroom facial region cluster detector
- */
-function analyzeClassroomRegions(
-  source: CanvasImageSource,
-  width: number,
-  height: number
-): DetectedFace[] {
   const canvas = document.createElement('canvas');
-  const scale = 320 / Math.max(width, height);
+  // Target a comfortable resolution for detection
+  const maxDim = 480;
+  const scale = maxDim / Math.max(width, height);
   const sw = Math.floor(width * scale);
   const sh = Math.floor(height * scale);
   canvas.width = sw;
@@ -66,58 +102,50 @@ function analyzeClassroomRegions(
   try {
     ctx.drawImage(source, 0, 0, sw, sh);
     const imgData = ctx.getImageData(0, 0, sw, sh);
-    const data = imgData.data;
+    const grayPixels = rgbaToGrayscale(imgData.data, sh, sw);
 
-    // Scan for face/skin clusters
-    const candidates: { x: number; y: number }[] = [];
-    const step = 6;
+    const imageObj = {
+      pixels: grayPixels,
+      nrows: sh,
+      ncols: sw,
+      ldim: sw,
+    };
 
-    for (let y = Math.floor(sh * 0.15); y < Math.floor(sh * 0.9); y += step) {
-      for (let x = Math.floor(sw * 0.08); x < Math.floor(sw * 0.92); x += step) {
-        const idx = (y * sw + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
+    const params = {
+      shiftfactor: 0.1, // shift window by 10%
+      minsize: 24, // minimum face size in pixels
+      maxsize: Math.min(sw, sh), // maximum face size
+      scalefactor: 1.15, // scale step
+    };
 
-        // Skin chrominance rule
-        const isSkin =
-          r > 90 &&
-          g > 40 &&
-          b > 20 &&
-          r > g &&
-          r > b &&
-          r - g > 15 &&
-          Math.abs(r - g) > 15;
+    let rawDetections = runCascade(imageObj, classifier, params);
+    // Cluster overlapping detections
+    rawDetections = clusterDetections(rawDetections, 0.2);
 
-        if (isSkin) {
-          candidates.push({ x: (x / sw) * 100, y: (y / sh) * 100 });
-        }
-      }
-    }
+    // Keep only high-confidence face detections (score threshold >= 5.0)
+    const validFaces = rawDetections.filter((det) => det[3] >= 5.0);
 
-    // Cluster candidates
-    const clustered: DetectedFace[] = [];
-    const minDist = 11; // minimum distance between student faces
+    return validFaces.map((det, idx) => {
+      const row = det[0];
+      const col = det[1];
+      const size = det[2];
 
-    for (const c of candidates) {
-      const exists = clustered.some(
-        (f) => Math.hypot(f.x - c.x, f.y - c.y) < minDist
-      );
-      if (!exists && clustered.length < 35) {
-        clustered.push({
-          id: clustered.length + 1,
-          x: Math.max(2, c.x - 6),
-          y: Math.max(2, c.y - 8),
-          width: 12,
-          height: 18,
-          called: false,
-        });
-      }
-    }
+      const x = Math.max(0, ((col - size / 2) / sw) * 100);
+      const y = Math.max(0, ((row - size / 2) / sh) * 100);
+      const w = Math.min(100 - x, (size / sw) * 100);
+      const h = Math.min(100 - y, (size / sh) * 100);
 
-    return clustered;
-  } catch (e) {
-    console.error('Vision analysis error:', e);
+      return {
+        id: idx + 1,
+        x,
+        y,
+        width: w,
+        height: h,
+        called: false,
+      };
+    });
+  } catch (err) {
+    console.error('Pico detection error:', err);
     return [];
   }
 }
