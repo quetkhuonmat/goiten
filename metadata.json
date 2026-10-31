@@ -1,0 +1,6 @@
+{
+  "name": "Gọi Tên Siêu Cấp AI - Camera Random Student Selector",
+  "description": "Ứng dụng quét camera bằng radar AI ngẫu nhiên chọn học sinh lên bảng với hiệu ứng âm thanh kịch tính và khóa mục tiêu.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

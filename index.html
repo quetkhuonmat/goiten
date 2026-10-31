@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Compatibility shim for browser extensions attempting to assign window.fetch
+      try {
+        var origFetch = window.fetch ? window.fetch.bind(window) : null;
+        var _activeFetch = origFetch;
+        Object.defineProperty(window, 'fetch', {
+          get: function() {
+            return _activeFetch;
+          },
+          set: function(val) {
+            _activeFetch = val;
+          },
+          configurable: true,
+          enumerable: true,
+        });
+      } catch (err) {
+        // ignore
+      }
+
+      // Suppress browser extension runtime errors from triggering global error boundary
+      window.addEventListener('error', function(e) {
+        if (e && (
+          (e.filename && (e.filename.indexOf('chrome-extension://') !== -1 || e.filename.indexOf('moz-extension://') !== -1)) ||
+          (e.message && e.message.indexOf('Cannot set property fetch') !== -1)
+        )) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          return true;
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function(e) {
+        if (e && e.reason && (
+          (e.reason.stack && (e.reason.stack.indexOf('chrome-extension://') !== -1 || e.reason.stack.indexOf('moz-extension://') !== -1)) ||
+          (e.reason.message && e.reason.message.indexOf('Cannot set property fetch') !== -1)
+        )) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }, true);
+    </script>
+    <title>Gọi Tên Siêu Cấp AI - Camera Random Student Selector</title>
+    <meta name="description" content="Ứng dụng quét camera bằng radar AI ngẫu nhiên chọn học sinh lên bảng với hiệu ứng âm thanh kịch tính và khóa mục tiêu." />
+    <meta property="og:title" content="Gọi Tên Siêu Cấp AI - Camera Random Student Selector" />
+    <meta property="og:description" content="Ứng dụng quét camera bằng radar AI ngẫu nhiên chọn học sinh lên bảng với hiệu ứng âm thanh kịch tính và khóa mục tiêu." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
