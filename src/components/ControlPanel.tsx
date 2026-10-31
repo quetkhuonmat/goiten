@@ -44,6 +44,7 @@ interface ControlPanelProps {
   onOpenPhoneGuide: () => void;
   onUploadCustomPhoto: (file: File) => void;
   onResetToLiveCamera: () => void;
+  onLoadTestClassroomPhoto: () => void;
   hasCustomPhoto: boolean;
   excludeCalled: boolean;
   onToggleExcludeCalled: (val: boolean) => void;
@@ -76,6 +77,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onOpenPhoneGuide,
   onUploadCustomPhoto,
   onResetToLiveCamera,
+  onLoadTestClassroomPhoto,
   hasCustomPhoto,
   excludeCalled,
   onToggleExcludeCalled,
@@ -326,6 +328,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </button>
             )}
           </div>
+
+          {/* Quick 1-click test button for the classroom photo */}
+          <button
+            onClick={() => {
+              onLoadTestClassroomPhoto();
+              sound.playFanfare();
+            }}
+            className="w-full mt-2 py-1.5 px-2 bg-gradient-to-r from-cyan-950 to-blue-950 hover:from-cyan-900 hover:to-blue-900 border border-cyan-500/40 rounded-lg text-cyan-300 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
+            <span>Thử nghiệm quét trên ảnh lớp học này (Ảnh thầy vừa gửi)</span>
+          </button>
         </div>
       </div>
 

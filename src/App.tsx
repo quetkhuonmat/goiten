@@ -264,7 +264,35 @@ export default function App() {
       called: calledIds.has(f.id),
     }));
 
-    setDetectedFaces(finalized);
+    setDetectedFaces((prev) => {
+      // If no faces are detected in current view, clear all boxes
+      if (finalized.length === 0) {
+        return [];
+      }
+
+      // Number faces cleanly from left to right (1, 2, 3...)
+      // Smooth coordinate jitter with previous frame
+      return finalized.map((face, idx) => {
+        const prevMatch = prev.find(
+          (p) => Math.hypot(p.x - face.x, p.y - face.y) < 8
+        );
+        if (prevMatch) {
+          return {
+            ...face,
+            id: idx + 1,
+            x: prevMatch.x * 0.6 + face.x * 0.4,
+            y: prevMatch.y * 0.6 + face.y * 0.4,
+            width: prevMatch.width * 0.6 + face.width * 0.4,
+            height: prevMatch.height * 0.6 + face.height * 0.4,
+          };
+        }
+        return {
+          ...face,
+          id: idx + 1,
+        };
+      });
+    });
+
     if (!silent) {
       setAppStage('ready');
       if (finalized.length > 0) {
@@ -278,7 +306,7 @@ export default function App() {
     if (!cameraActive || appStage !== 'ready') return;
     const interval = setInterval(() => {
       runFaceDetection(true);
-    }, 2800);
+    }, 1500);
     return () => clearInterval(interval);
   }, [cameraActive, appStage, runFaceDetection]);
 
@@ -300,8 +328,8 @@ export default function App() {
   const handleStartPick = () => {
     if (appStage === 'picking') return;
     if (detectedFaces.length === 0) {
-      sound.playClick();
-      setCameraError('Chưa phát hiện khuôn mặt nào trong khung hình. Vui lòng hướng camera về phía học sinh!');
+      sound.playScanBeep(0.5);
+      runFaceDetection(false);
       return;
     }
 
@@ -597,6 +625,10 @@ export default function App() {
             onOpenPhoneGuide={() => setIsPhoneGuideOpen(true)}
             onUploadCustomPhoto={handleUploadCustomPhoto}
             onResetToLiveCamera={handleResetToLiveCamera}
+            onLoadTestClassroomPhoto={() => {
+              setCustomPhotoUrl('/public/assets/aistudio/image_4dccfae1.png');
+              setAppStage('ready');
+            }}
             hasCustomPhoto={Boolean(customPhotoUrl)}
             excludeCalled={excludeCalled}
             onToggleExcludeCalled={setExcludeCalled}

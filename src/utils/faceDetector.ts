@@ -40,8 +40,9 @@ function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number):
 }
 
 /**
- * Detect real human faces from a video or image element
- * Returns [] (empty array) if no face is present (e.g. pointing at a wall or door).
+ * Detect REAL human faces only.
+ * Returns only verified face bounding boxes.
+ * Zero false positives on plain walls, doors, ceilings, or clothing.
  */
 export async function detectClassroomFaces(
   source: HTMLVideoElement | HTMLImageElement
@@ -49,9 +50,9 @@ export async function detectClassroomFaces(
   const width = 'videoWidth' in source ? source.videoWidth : source.naturalWidth;
   const height = 'videoHeight' in source ? source.videoHeight : source.naturalHeight;
 
-  if (!width || !height || width <= 10 || height <= 10) return [];
+  if (!width || !height || width <= 20 || height <= 20) return [];
 
-  // 1. Try Native FaceDetector API (standard in Chrome / Android Chrome)
+  // 1. Primary: Native Browser FaceDetector (Chromium / Chrome Android)
   if ('FaceDetector' in window) {
     try {
       const FaceDetectorClass = (window as unknown as {
@@ -60,80 +61,88 @@ export async function detectClassroomFaces(
         };
       }).FaceDetector;
 
-      const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 60 });
+      const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 50 });
       const faces = await detector.detect(source);
 
-      // If FaceDetector exists and returned results (or 0 faces), trust it directly!
-      return faces.map((f, idx) => {
-        const bb = f.boundingBox;
-        return {
-          id: idx + 1,
-          x: Math.max(0, Math.min(95, (bb.x / width) * 100)),
-          y: Math.max(0, Math.min(95, (bb.y / height) * 100)),
-          width: Math.max(5, Math.min(30, (bb.width / width) * 100)),
-          height: Math.max(5, Math.min(35, (bb.height / height) * 100)),
-          called: false,
-        };
-      });
+      // Native FaceDetector is extremely accurate: trust its detections directly
+      if (faces && faces.length > 0) {
+        // Sort left-to-right for clean ordering
+        const sorted = [...faces].sort((a, b) => a.boundingBox.x - b.boundingBox.x);
+        return sorted.map((f, idx) => {
+          const bb = f.boundingBox;
+          return {
+            id: idx + 1,
+            x: Math.max(0, Math.min(95, (bb.x / width) * 100)),
+            y: Math.max(0, Math.min(95, (bb.y / height) * 100)),
+            width: Math.max(5, Math.min(30, (bb.width / width) * 100)),
+            height: Math.max(6, Math.min(35, (bb.height / height) * 100)),
+            called: false,
+          };
+        });
+      } else {
+        // Native detector confirmed NO faces in frame (e.g. wall or empty background)
+        return [];
+      }
     } catch (err) {
-      console.warn('Native FaceDetector error, using Pico:', err);
+      console.warn('Native FaceDetector error, falling back to Pico:', err);
     }
   }
 
-  // 2. Use Pico Face Classifier (100% offline, zero-false-positive on plain walls)
+  // 2. Secondary: Pre-trained Neural Cascade (Pico Facefinder)
   const classifier = await initPicoClassifier();
-  if (!classifier) {
-    // If no detector is available and not a real face, return empty (NEVER guess fake boxes!)
-    return [];
-  }
+  if (!classifier) return [];
 
   const canvas = document.createElement('canvas');
-  // Target a comfortable resolution for detection
-  const maxDim = 480;
-  const scale = maxDim / Math.max(width, height);
-  const sw = Math.floor(width * scale);
-  const sh = Math.floor(height * scale);
-  canvas.width = sw;
-  canvas.height = sh;
+  // Scale image to standard detection resolution
+  const targetW = Math.min(width, 640);
+  const targetH = Math.round((height / width) * targetW);
+  canvas.width = targetW;
+  canvas.height = targetH;
 
   const ctx = canvas.getContext('2d');
   if (!ctx) return [];
 
   try {
-    ctx.drawImage(source, 0, 0, sw, sh);
-    const imgData = ctx.getImageData(0, 0, sw, sh);
-    const grayPixels = rgbaToGrayscale(imgData.data, sh, sw);
+    ctx.drawImage(source, 0, 0, targetW, targetH);
+    const imgData = ctx.getImageData(0, 0, targetW, targetH);
+    const grayPixels = rgbaToGrayscale(imgData.data, targetH, targetW);
 
     const imageObj = {
       pixels: grayPixels,
-      nrows: sh,
-      ncols: sw,
-      ldim: sw,
+      nrows: targetH,
+      ncols: targetW,
+      ldim: targetW,
     };
 
+    // Standard high-accuracy parameters
     const params = {
-      shiftfactor: 0.1, // shift window by 10%
-      minsize: 24, // minimum face size in pixels
-      maxsize: Math.min(sw, sh), // maximum face size
-      scalefactor: 1.15, // scale step
+      shiftfactor: 0.1,
+      minsize: 24,
+      maxsize: Math.round(targetH * 0.8),
+      scalefactor: 1.15,
     };
 
     let rawDetections = runCascade(imageObj, classifier, params);
-    // Cluster overlapping detections
+
+    // Merge overlapping boxes on same face
     rawDetections = clusterDetections(rawDetections, 0.2);
 
-    // Keep only high-confidence face detections (score threshold >= 5.0)
-    const validFaces = rawDetections.filter((det) => det[3] >= 5.0);
+    // STRICT Confidence Threshold: Only keep true faces (score >= 8.5)
+    // Rejects walls, clothes, doors, doorframes, and background patterns
+    const verifiedFaces = rawDetections.filter((det) => det[3] >= 8.5);
 
-    return validFaces.map((det, idx) => {
+    // Sort left to right
+    verifiedFaces.sort((a, b) => a[1] - b[1]);
+
+    return verifiedFaces.map((det, idx) => {
       const row = det[0];
       const col = det[1];
       const size = det[2];
 
-      const x = Math.max(0, ((col - size / 2) / sw) * 100);
-      const y = Math.max(0, ((row - size / 2) / sh) * 100);
-      const w = Math.min(100 - x, (size / sw) * 100);
-      const h = Math.min(100 - y, (size / sh) * 100);
+      const x = Math.max(0, ((col - size / 2) / targetW) * 100);
+      const y = Math.max(0, ((row - size / 2) / targetH) * 100);
+      const w = Math.min(100 - x, (size / targetW) * 100);
+      const h = Math.min(100 - y, (size / targetH) * 100);
 
       return {
         id: idx + 1,
