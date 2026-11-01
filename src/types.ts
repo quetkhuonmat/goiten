@@ -15,5 +15,28 @@ export interface CalledFaceRecord {
   facePhotoUrl: string;
   time: string;
   faceId: number;
+  studentName?: string;
+  score: number;
+}
+
+export interface StudentPhotoItem {
+  id: string;
+  name: string;
+  photoUrl: string;
+  called: boolean;
+}
+
+export type MainViewMode = 'camera' | 'album' | 'remote-camera';
+
+export interface RemoteRoomState {
+  roomId: string;
+  createdAt: number;
+  lastActive: number;
+  phoneConnected: boolean;
+  stage: AppStage;
+  detectedFaces: DetectedFace[];
+  lockedFace: DetectedFace | null;
+  lockedFaceUrl: string | null;
+  latestFrame: string | null;
   score: number;
 }

@@ -9,6 +9,7 @@ interface LockedStudentModalProps {
   facePhotoUrl: string | null;
   targetBox: DetectedFace | null;
   score: number;
+  studentName?: string;
   onClose: () => void;
   onScanAgain: () => void;
   onAddScore: () => void;
@@ -19,6 +20,7 @@ export const LockedStudentModal: React.FC<LockedStudentModalProps> = ({
   facePhotoUrl,
   targetBox,
   score,
+  studentName,
   onClose,
   onScanAgain,
   onAddScore,
@@ -129,6 +131,15 @@ export const LockedStudentModal: React.FC<LockedStudentModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Student name if available */}
+        {studentName && (
+          <div className="mb-4">
+            <div className="text-xl font-black font-cyber text-amber-300 tracking-wide">
+              {studentName}
+            </div>
+          </div>
+        )}
 
         {/* Score stars if awarded */}
         {score > 0 && (

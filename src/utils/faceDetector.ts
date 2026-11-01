@@ -39,6 +39,46 @@ function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number):
   return pixels;
 }
 
+// Helper to expand a raw detected face into a generous, complete head portrait box
+function expandToHeadPortraitBox(
+  rawX: number,
+  rawY: number,
+  rawW: number,
+  rawH: number,
+  frameW: number,
+  frameH: number
+): { x: number; y: number; width: number; height: number } {
+  const cx = rawX + rawW / 2;
+  const cy = rawY + rawH / 2;
+
+  // Raw detector finds eyes/nose/mouth.
+  // Expand width by 1.45x to capture ears, cheeks, and sides of hair.
+  // Expand height by 1.60x to capture full hair, forehead, chin, and collar.
+  const expandedW = Math.max(frameW * 0.06, rawW * 1.45);
+  const expandedH = Math.max(frameH * 0.08, rawH * 1.6);
+
+  // Humans have more head/hair above the eyes, so shift box up slightly (52% above center)
+  let boxX = cx - expandedW / 2;
+  let boxY = cy - expandedH * 0.52;
+
+  // Clamp within image boundary
+  boxX = Math.max(0, Math.min(frameW - expandedW, boxX));
+  boxY = Math.max(0, Math.min(frameH - expandedH, boxY));
+
+  // Convert to percentage (0 - 100)
+  const x = Math.max(0, (boxX / frameW) * 100);
+  const y = Math.max(0, (boxY / frameH) * 100);
+  const w = Math.min(100 - x, (expandedW / frameW) * 100);
+  const h = Math.min(100 - y, (expandedH / frameH) * 100);
+
+  return {
+    x: Number(x.toFixed(2)),
+    y: Number(y.toFixed(2)),
+    width: Number(w.toFixed(2)),
+    height: Number(h.toFixed(2)),
+  };
+}
+
 /**
  * Detect REAL human faces only.
  * Returns only verified face bounding boxes.
@@ -70,12 +110,10 @@ export async function detectClassroomFaces(
         const sorted = [...faces].sort((a, b) => a.boundingBox.x - b.boundingBox.x);
         return sorted.map((f, idx) => {
           const bb = f.boundingBox;
+          const box = expandToHeadPortraitBox(bb.x, bb.y, bb.width, bb.height, width, height);
           return {
             id: idx + 1,
-            x: Math.max(0, Math.min(95, (bb.x / width) * 100)),
-            y: Math.max(0, Math.min(95, (bb.y / height) * 100)),
-            width: Math.max(5, Math.min(30, (bb.width / width) * 100)),
-            height: Math.max(6, Math.min(35, (bb.height / height) * 100)),
+            ...box,
             called: false,
           };
         });
@@ -139,17 +177,18 @@ export async function detectClassroomFaces(
       const col = det[1];
       const size = det[2];
 
-      const x = Math.max(0, ((col - size / 2) / targetW) * 100);
-      const y = Math.max(0, ((row - size / 2) / targetH) * 100);
-      const w = Math.min(100 - x, (size / targetW) * 100);
-      const h = Math.min(100 - y, (size / targetH) * 100);
+      const box = expandToHeadPortraitBox(
+        col - size / 2,
+        row - size / 2,
+        size,
+        size,
+        targetW,
+        targetH
+      );
 
       return {
         id: idx + 1,
-        x,
-        y,
-        width: w,
-        height: h,
+        ...box,
         called: false,
       };
     });
