@@ -39,37 +39,96 @@ function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number):
   return pixels;
 }
 
-// Helper to expand a raw detected face into a generous, complete head portrait box
-function expandToHeadPortraitBox(
-  rawX: number,
-  rawY: number,
-  rawW: number,
-  rawH: number,
+/**
+ * Validates whether a candidate region has human skin color distribution
+ * Rejects plain walls, chalkboards, whiteboards, doors, clothes, curtains.
+ */
+function isHumanFaceRegion(
+  rgba: Uint8ClampedArray,
+  col: number,
+  row: number,
+  size: number,
+  imgWidth: number,
+  imgHeight: number
+): boolean {
+  const half = Math.round(size / 2);
+  const startX = Math.max(0, Math.round(col - half));
+  const startY = Math.max(0, Math.round(row - half));
+  const endX = Math.min(imgWidth, Math.round(col + half));
+  const endY = Math.min(imgHeight, Math.round(row + half));
+
+  if (endX <= startX || endY <= startY) return false;
+
+  let skinPixels = 0;
+  let totalSampled = 0;
+  // Sample a grid of pixels inside the candidate face box
+  const step = Math.max(1, Math.floor(size / 16));
+
+  for (let y = startY; y < endY; y += step) {
+    for (let x = startX; x < endX; x += step) {
+      const idx = (y * imgWidth + x) * 4;
+      const r = rgba[idx];
+      const g = rgba[idx + 1];
+      const b = rgba[idx + 2];
+
+      totalSampled++;
+
+      // YCbCr skin tone transformation
+      // Y  =  0.299*R + 0.587*G + 0.114*B
+      // Cb = -0.168736*R - 0.331264*G + 0.5*B + 128
+      // Cr =  0.5*R - 0.418688*G - 0.081312*B + 128
+      const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+      const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+
+      // Human skin cluster: Cr ~ [133, 175], Cb ~ [75, 130]
+      const isSkinYCbCr = cb >= 75 && cb <= 132 && cr >= 130 && cr <= 178;
+      // Basic RGB skin heuristic: R > G > B, noticeable red dominance
+      const isSkinRgb = r > 65 && g > 40 && b > 25 && r > g && r > b && (r - g) >= 8;
+
+      if (isSkinYCbCr || isSkinRgb) {
+        skinPixels++;
+      }
+    }
+  }
+
+  if (totalSampled === 0) return false;
+  const skinRatio = skinPixels / totalSampled;
+  // A true face box must have at least 18% skin pixels
+  // Walls, doors, blackboards, uniforms typically have < 5%
+  return skinRatio >= 0.18;
+}
+
+/**
+ * Natural head portrait box framing from hairline to chin and cheek to cheek.
+ * Accurately fits student face without arbitrary distortion or massive oversized padding.
+ */
+function createAccurateHeadBox(
+  cx: number,
+  cy: number,
+  size: number,
   frameW: number,
   frameH: number
 ): { x: number; y: number; width: number; height: number } {
-  const cx = rawX + rawW / 2;
-  const cy = rawY + rawH / 2;
+  // A standard facial cascade finds inner facial landmarks (eyes to mouth)
+  // Snug head bounding box:
+  // Width: 1.15x detector size (captures ears & cheeks)
+  // Height: 1.30x detector size (captures hair down to chin)
+  const boxW = size * 1.15;
+  const boxH = size * 1.30;
 
-  // Raw detector finds eyes/nose/mouth.
-  // Expand width by 1.45x to capture ears, cheeks, and sides of hair.
-  // Expand height by 1.60x to capture full hair, forehead, chin, and collar.
-  const expandedW = Math.max(frameW * 0.06, rawW * 1.45);
-  const expandedH = Math.max(frameH * 0.08, rawH * 1.6);
+  // Center horizontally, shift up slightly (0.54) so the hairline and forehead are inside
+  let boxX = cx - boxW / 2;
+  let boxY = cy - boxH * 0.54;
 
-  // Humans have more head/hair above the eyes, so shift box up slightly (52% above center)
-  let boxX = cx - expandedW / 2;
-  let boxY = cy - expandedH * 0.52;
-
-  // Clamp within image boundary
-  boxX = Math.max(0, Math.min(frameW - expandedW, boxX));
-  boxY = Math.max(0, Math.min(frameH - expandedH, boxY));
+  // Clamp within image bounds
+  boxX = Math.max(0, Math.min(frameW - boxW, boxX));
+  boxY = Math.max(0, Math.min(frameH - boxH, boxY));
 
   // Convert to percentage (0 - 100)
   const x = Math.max(0, (boxX / frameW) * 100);
   const y = Math.max(0, (boxY / frameH) * 100);
-  const w = Math.min(100 - x, (expandedW / frameW) * 100);
-  const h = Math.min(100 - y, (expandedH / frameH) * 100);
+  const w = Math.min(100 - x, (boxW / frameW) * 100);
+  const h = Math.min(100 - y, (boxH / frameH) * 100);
 
   return {
     x: Number(x.toFixed(2)),
@@ -81,8 +140,8 @@ function expandToHeadPortraitBox(
 
 /**
  * Detect REAL human faces only.
- * Returns only verified face bounding boxes.
- * Zero false positives on plain walls, doors, ceilings, or clothing.
+ * Returns verified face bounding boxes precisely framing students.
+ * Eliminates empty rectangles on walls, doors, ceilings, or clothing.
  */
 export async function detectClassroomFaces(
   source: HTMLVideoElement | HTMLImageElement
@@ -90,9 +149,9 @@ export async function detectClassroomFaces(
   const width = 'videoWidth' in source ? source.videoWidth : source.naturalWidth;
   const height = 'videoHeight' in source ? source.videoHeight : source.naturalHeight;
 
-  if (!width || !height || width <= 20 || height <= 20) return [];
+  if (!width || !height || width <= 30 || height <= 30) return [];
 
-  // 1. Primary: Native Browser FaceDetector (Chromium / Chrome Android)
+  // 1. Primary: Native Browser FaceDetector (Chromium / Chrome Android) if available
   if ('FaceDetector' in window) {
     try {
       const FaceDetectorClass = (window as unknown as {
@@ -104,40 +163,46 @@ export async function detectClassroomFaces(
       const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 50 });
       const faces = await detector.detect(source);
 
-      // Native FaceDetector is extremely accurate: trust its detections directly
       if (faces && faces.length > 0) {
-        // Sort left-to-right for clean ordering
-        const sorted = [...faces].sort((a, b) => a.boundingBox.x - b.boundingBox.x);
+        // Sort left-to-right, then top-to-bottom
+        const sorted = [...faces].sort((a, b) => {
+          const rowA = Math.round(a.boundingBox.y / 50);
+          const rowB = Math.round(b.boundingBox.y / 50);
+          if (rowA !== rowB) return rowA - rowB;
+          return a.boundingBox.x - b.boundingBox.x;
+        });
+
         return sorted.map((f, idx) => {
           const bb = f.boundingBox;
-          const box = expandToHeadPortraitBox(bb.x, bb.y, bb.width, bb.height, width, height);
+          const cx = bb.x + bb.width / 2;
+          const cy = bb.y + bb.height / 2;
+          const size = Math.max(bb.width, bb.height);
+          const box = createAccurateHeadBox(cx, cy, size, width, height);
+
           return {
             id: idx + 1,
             ...box,
             called: false,
           };
         });
-      } else {
-        // Native detector confirmed NO faces in frame (e.g. wall or empty background)
-        return [];
       }
     } catch (err) {
-      console.warn('Native FaceDetector error, falling back to Pico:', err);
+      console.warn('Native FaceDetector error, continuing to Pico:', err);
     }
   }
 
-  // 2. Secondary: Pre-trained Neural Cascade (Pico Facefinder)
+  // 2. High-Precision Pico Neural Cascade with Color & Skin Verification
   const classifier = await initPicoClassifier();
   if (!classifier) return [];
 
   const canvas = document.createElement('canvas');
-  // Scale image to standard detection resolution
-  const targetW = Math.min(width, 640);
+  // Scale image to good detection resolution (higher resolution captures distant classroom faces)
+  const targetW = Math.min(width, 800);
   const targetH = Math.round((height / width) * targetW);
   canvas.width = targetW;
   canvas.height = targetH;
 
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [];
 
   try {
@@ -152,39 +217,55 @@ export async function detectClassroomFaces(
       ldim: targetW,
     };
 
-    // Standard high-accuracy parameters
+    // Parameters optimized for classroom students (both foreground and middle/back rows)
     const params = {
       shiftfactor: 0.1,
-      minsize: 24,
-      maxsize: Math.round(targetH * 0.8),
-      scalefactor: 1.15,
+      minsize: Math.max(20, Math.round(targetW * 0.035)), // Detect small faces in classroom
+      maxsize: Math.round(targetH * 0.75),
+      scalefactor: 1.14,
     };
 
     let rawDetections = runCascade(imageObj, classifier, params);
 
     // Merge overlapping boxes on same face
-    rawDetections = clusterDetections(rawDetections, 0.2);
+    rawDetections = clusterDetections(rawDetections, 0.25);
 
-    // STRICT Confidence Threshold: Only keep true faces (score >= 8.5)
-    // Rejects walls, clothes, doors, doorframes, and background patterns
-    const verifiedFaces = rawDetections.filter((det) => det[3] >= 8.5);
+    // Filter by cascade score AND Skin Tone Verification
+    // Rejects walls, clothing, doorframes, curtains, and artifacts
+    const verifiedFaces: Array<[number, number, number, number]> = [];
 
-    // Sort left to right
-    verifiedFaces.sort((a, b) => a[1] - b[1]);
+    for (const det of rawDetections) {
+      const row = det[0];
+      const col = det[1];
+      const size = det[2];
+      const score = det[3];
+
+      // Minimum cascade confidence
+      if (score < 7.0) continue;
+
+      // Color/Skin validation against false positives
+      const isSkinFace = isHumanFaceRegion(imgData.data, col, row, size, targetW, targetH);
+      if (!isSkinFace) {
+        continue; // Discard empty background/walls
+      }
+
+      verifiedFaces.push(det);
+    }
+
+    // Sort faces systematically (first by row, then by left-to-right column)
+    verifiedFaces.sort((a, b) => {
+      const rowA = Math.round(a[0] / 60);
+      const rowB = Math.round(b[0] / 60);
+      if (rowA !== rowB) return rowA - rowB;
+      return a[1] - b[1];
+    });
 
     return verifiedFaces.map((det, idx) => {
       const row = det[0];
       const col = det[1];
       const size = det[2];
 
-      const box = expandToHeadPortraitBox(
-        col - size / 2,
-        row - size / 2,
-        size,
-        size,
-        targetW,
-        targetH
-      );
+      const box = createAccurateHeadBox(col, row, size, targetW, targetH);
 
       return {
         id: idx + 1,

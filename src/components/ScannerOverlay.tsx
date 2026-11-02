@@ -103,14 +103,14 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
         return (
           <div
             key={face.id}
-            className={`absolute transition-all duration-100 rounded-lg pointer-events-none ${
+            className={`absolute rounded-lg pointer-events-none ${
               isLocked
-                ? 'border-3 border-amber-400 bg-amber-400/30 shadow-[0_0_35px_rgba(251,191,36,0.9)] scale-105 z-30'
+                ? 'border-3 border-amber-400 bg-amber-400/30 shadow-[0_0_35px_rgba(251,191,36,0.9)] scale-105 z-30 transition-transform duration-100'
                 : isHighlighted
-                ? 'border-2 border-yellow-300 bg-yellow-400/25 shadow-[0_0_25px_rgba(253,224,71,0.8)] scale-110 z-20'
+                ? 'border-2 border-yellow-300 bg-yellow-400/25 shadow-[0_0_25px_rgba(253,224,71,0.8)] scale-105 z-20 transition-transform duration-100'
                 : face.called
                 ? 'border border-slate-600/50 bg-slate-900/30 opacity-40'
-                : 'border border-cyan-400/70 bg-cyan-500/10 hover:border-cyan-300'
+                : 'border-2 border-cyan-400/80 bg-cyan-500/10'
             }`}
             style={{
               left: `${face.x}%`,

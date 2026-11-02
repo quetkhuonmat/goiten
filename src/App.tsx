@@ -293,16 +293,24 @@ export default function App() {
 
         if (activeTrack) {
           const settings = (activeTrack.getSettings ? activeTrack.getSettings() : {}) as MediaTrackSettings;
-          const trackLabel = activeTrack.label || '';
+          const trackLabel = (activeTrack.label || '').toLowerCase();
+          const isFront =
+            settings.facingMode === 'user' ||
+            /front|trước|selfie|face/i.test(trackLabel);
 
           if (
             targetFacing === 'environment' &&
-            (settings.facingMode === 'user' || /front|trước|selfie/i.test(trackLabel)) &&
-            !deviceToUse
+            isFront &&
+            !deviceToUse &&
+            videoInputs.length > 1
           ) {
-            const rearDevice = videoInputs.find((d) =>
-              /back|rear|sau|environment|cam.*1|0.*facing back/i.test(d.label)
-            );
+            const rearDevice = videoInputs.find((d) => {
+              const lbl = d.label.toLowerCase();
+              return (
+                /back|rear|sau|environment|cam.*1|0.*facing back|camera2 0/i.test(lbl) ||
+                (!/front|trước|selfie|face/i.test(lbl) && d.deviceId !== settings.deviceId)
+              );
+            });
             if (rearDevice && rearDevice.deviceId && rearDevice.deviceId !== settings.deviceId) {
               startCamera('environment', rearDevice.deviceId);
               return;
@@ -433,10 +441,10 @@ export default function App() {
 
       const cx = facePxX + facePxW / 2;
       const cy = facePxY + facePxH / 2;
-      const cropSize = Math.max(facePxW, facePxH) * 1.30;
+      const cropSize = Math.max(facePxW, facePxH) * 1.15;
 
       let sx = cx - cropSize / 2;
-      let sy = cy - cropSize * 0.48;
+      let sy = cy - cropSize * 0.50;
       let sw = cropSize;
       let sh = cropSize;
 
