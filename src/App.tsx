@@ -25,12 +25,20 @@ import { sound } from './utils/audio';
 import {
   History,
   RefreshCw,
+  RotateCw,
   Camera,
   Upload,
   Wifi,
   Users,
   Smartphone,
 } from 'lucide-react';
+import {
+  classifyCameraDevice,
+  getSortedCameraDevices,
+  CameraDeviceInfo,
+  lockOrientationLandscape,
+  unlockOrientation,
+} from './utils/cameraUtils';
 
 const DEV_APP_URL = 'https://ais-dev-3becnjuf7ng6rgghq67tzs-264511727123.asia-east1.run.app';
 
@@ -100,7 +108,17 @@ export default function App() {
   const [mediaAspectRatio, setMediaAspectRatio] = useState<number | null>(null);
   const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [classifiedDevices, setClassifiedDevices] = useState<CameraDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
+    return localStorage.getItem('preferred_main_cam_id') || '';
+  });
+  const [rotationAngle, setRotationAngle] = useState<number>(0);
+  const [isPhysicalLandscape, setIsPhysicalLandscape] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth > window.innerHeight;
+    }
+    return false;
+  });
   const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
@@ -150,20 +168,50 @@ export default function App() {
     );
   }
 
-  // Enumerate video devices
+  // Enumerate video devices and classify them
   const updateDeviceList = useCallback(async () => {
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        const rawDevices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = rawDevices.filter((d) => d.kind === 'videoinput');
         setAvailableDevices(videoInputs);
-        return videoInputs;
+        const sorted = getSortedCameraDevices(rawDevices);
+        setClassifiedDevices(sorted);
+        return sorted;
       }
     } catch (err) {
       console.warn('Cannot enumerate devices:', err);
     }
     return [];
   }, []);
+
+  // Listen for orientation or window resize
+  useEffect(() => {
+    const handleResize = () => {
+      setIsPhysicalLandscape(window.innerWidth > window.innerHeight);
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+
+  // Toggle Landscape Orientation / Software Rotation
+  const handleToggleRotation = useCallback(async () => {
+    if (!isPhysicalLandscape && rotationAngle === 0) {
+      const locked = await lockOrientationLandscape(containerRef.current);
+      if (!locked) {
+        setRotationAngle(90);
+      }
+    } else if (rotationAngle === 90) {
+      setRotationAngle(0);
+      unlockOrientation();
+    } else {
+      setRotationAngle((prev) => (prev + 90) % 360);
+    }
+  }, [isPhysicalLandscape, rotationAngle]);
 
   // Hardware digital zoom controller
   const handleZoomChange = useCallback(
@@ -221,38 +269,40 @@ export default function App() {
         }
 
         let deviceToUse = specificDeviceId;
-        if (!deviceToUse && targetFacing === 'environment' && isMobile) {
-          try {
-            const currentDevs = await navigator.mediaDevices.enumerateDevices();
-            const rear = currentDevs.find(
-              (d) =>
-                d.kind === 'videoinput' &&
-                /back|rear|sau|environment|cam.*1|0.*facing back/i.test(d.label)
-            );
-            if (rear && rear.deviceId) {
-              deviceToUse = rear.deviceId;
-            }
-          } catch {
-            // silent catch
-          }
+        if (!deviceToUse) {
+          const savedId = localStorage.getItem('preferred_main_cam_id');
+          if (savedId) deviceToUse = savedId;
         }
 
         let stream: MediaStream;
 
         if (deviceToUse) {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              deviceId: { exact: deviceToUse },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-            audio: false,
-          });
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                deviceId: { exact: deviceToUse },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            });
+          } catch {
+            // Fallback if specific deviceId failed
+            deviceToUse = undefined;
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: targetFacing },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            });
+          }
         } else if (targetFacing === 'environment') {
           try {
             stream = await navigator.mediaDevices.getUserMedia({
               video: {
-                facingMode: { exact: 'environment' },
+                facingMode: { ideal: 'environment' },
                 width: { ideal: 1920 },
                 height: { ideal: 1080 },
               },
@@ -261,9 +311,9 @@ export default function App() {
           } catch {
             stream = await navigator.mediaDevices.getUserMedia({
               video: {
-                facingMode: { ideal: 'environment' },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
+                facingMode: 'environment',
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
               },
               audio: false,
             });
@@ -288,37 +338,41 @@ export default function App() {
 
         setCameraActive(true);
 
-        const videoInputs = await updateDeviceList();
+        const sortedDevices = await updateDeviceList();
         const activeTrack = stream.getVideoTracks()[0];
 
         if (activeTrack) {
           const settings = (activeTrack.getSettings ? activeTrack.getSettings() : {}) as MediaTrackSettings;
-          const trackLabel = (activeTrack.label || '').toLowerCase();
-          const isFront =
-            settings.facingMode === 'user' ||
-            /front|trước|selfie|face/i.test(trackLabel);
+          const trackLabel = activeTrack.label || '';
+          const currentId = settings.deviceId || '';
 
-          if (
-            targetFacing === 'environment' &&
-            isFront &&
-            !deviceToUse &&
-            videoInputs.length > 1
-          ) {
-            const rearDevice = videoInputs.find((d) => {
-              const lbl = d.label.toLowerCase();
-              return (
-                /back|rear|sau|environment|cam.*1|0.*facing back|camera2 0/i.test(lbl) ||
-                (!/front|trước|selfie|face/i.test(lbl) && d.deviceId !== settings.deviceId)
-              );
-            });
-            if (rearDevice && rearDevice.deviceId && rearDevice.deviceId !== settings.deviceId) {
-              startCamera('environment', rearDevice.deviceId);
+          const activeInfo =
+            sortedDevices.find((c) => c.deviceId === currentId) ||
+            classifyCameraDevice(
+              {
+                deviceId: currentId,
+                label: trackLabel,
+                kind: 'videoinput',
+                groupId: '',
+                toJSON: () => ({}),
+              },
+              0
+            );
+
+          // AUTO-SWITCH TO REAR CAMERA IF BROWSER GAVE FRONT ON MOBILE
+          if (targetFacing === 'environment' && activeInfo.isFront && !specificDeviceId) {
+            const firstRear = sortedDevices.find((d) => d.isRear);
+            if (firstRear && firstRear.deviceId && firstRear.deviceId !== currentId) {
+              console.log('Detected front camera opened on mobile, auto-switching to rear camera:', firstRear);
+              localStorage.setItem('preferred_main_cam_id', firstRear.deviceId);
+              startCamera('environment', firstRear.deviceId);
               return;
             }
           }
 
-          if (settings.deviceId) {
-            setSelectedDeviceId(settings.deviceId);
+          if (currentId) {
+            setSelectedDeviceId(currentId);
+            localStorage.setItem('preferred_main_cam_id', currentId);
           }
 
           const capabilities = (activeTrack.getCapabilities ? activeTrack.getCapabilities() : {}) as {
@@ -371,21 +425,33 @@ export default function App() {
 
   // Toggle Camera Facing
   const handleToggleCameraFacing = () => {
-    const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
-    setCameraFacing(nextFacing);
-    setSelectedDeviceId('');
-    setCustomPhotoUrl(null);
-    startCamera(nextFacing);
+    sound.playClick();
+    if (classifiedDevices.length > 2) {
+      const currentIndex = classifiedDevices.findIndex((d) => d.deviceId === selectedDeviceId);
+      const nextIndex = (currentIndex + 1) % classifiedDevices.length;
+      const nextDev = classifiedDevices[nextIndex];
+      setSelectedDeviceId(nextDev.deviceId);
+      setCustomPhotoUrl(null);
+      startCamera(nextDev.isFront ? 'user' : 'environment', nextDev.deviceId);
+    } else {
+      const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+      setCameraFacing(nextFacing);
+      setSelectedDeviceId('');
+      setCustomPhotoUrl(null);
+      startCamera(nextFacing);
+    }
   };
 
   const handleSelectDeviceId = (devId: string) => {
     setSelectedDeviceId(devId);
     setCustomPhotoUrl(null);
-    startCamera(cameraFacing, devId);
+    const chosen = classifiedDevices.find((d) => d.deviceId === devId);
+    startCamera(chosen?.isFront ? 'user' : 'environment', devId);
   };
 
   useEffect(() => {
-    startCamera('environment');
+    const savedId = localStorage.getItem('preferred_main_cam_id');
+    startCamera('environment', savedId || undefined);
 
     return () => {
       if (mediaStreamRef.current) {
@@ -916,15 +982,21 @@ export default function App() {
           ) : (
             // 3. LOCAL CAMERA OR UPLOADED PHOTO STAGE
             <div
-              className="relative flex items-center justify-center max-w-full max-h-full overflow-hidden transition-transform duration-200"
+              className="relative flex items-center justify-center max-w-full max-h-full overflow-hidden transition-transform duration-300"
               style={{
-                aspectRatio: mediaAspectRatio ? `${mediaAspectRatio}` : undefined,
-                width: mediaAspectRatio ? undefined : '100%',
-                height: mediaAspectRatio ? undefined : '100%',
+                transform: `rotate(${rotationAngle}deg)`,
+                aspectRatio:
+                  rotationAngle === 90 || rotationAngle === 270
+                    ? mediaAspectRatio
+                      ? `${1 / mediaAspectRatio}`
+                      : undefined
+                    : mediaAspectRatio
+                    ? `${mediaAspectRatio}`
+                    : undefined,
+                width: rotationAngle === 90 || rotationAngle === 270 ? '100vh' : '100%',
+                height: rotationAngle === 90 || rotationAngle === 270 ? '100vw' : '100%',
                 maxWidth: '100%',
                 maxHeight: '100%',
-                transform: isHardwareZoom ? 'none' : `scale(${zoom})`,
-                transformOrigin: 'center center',
               }}
             >
               {customPhotoUrl ? (
@@ -1000,16 +1072,29 @@ export default function App() {
             </div>
           )}
 
-          {/* Floating Flip Camera button directly on video screen */}
+          {/* Floating Action Buttons top left of video stage */}
           {mainViewMode === 'camera' && (
-            <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+            <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2">
               <button
                 onClick={handleToggleCameraFacing}
                 title="Đổi Camera Trước / Sau"
                 className="flex items-center gap-1.5 bg-slate-950/80 hover:bg-slate-900 border border-cyan-500/40 text-cyan-300 hover:text-white px-3 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-lg"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Đổi Camera ({cameraFacing === 'environment' ? 'Sau' : 'Trước'})</span>
+                <span>Đổi Cam ({cameraFacing === 'environment' ? 'Sau' : 'Trước'})</span>
+              </button>
+
+              <button
+                onClick={handleToggleRotation}
+                title="Xoay điện thoại chiều ngang (Toàn cảnh lớp)"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-lg border ${
+                  rotationAngle !== 0 || isPhysicalLandscape
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-200'
+                    : 'bg-slate-950/80 hover:bg-slate-900 border-cyan-500/40 text-cyan-300'
+                }`}
+              >
+                <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                <span>{rotationAngle !== 0 ? `Xoay ${rotationAngle}°` : 'Xoay Ngang'}</span>
               </button>
             </div>
           )}
@@ -1059,8 +1144,12 @@ export default function App() {
             cameraFacing={cameraFacing}
             onToggleCameraFacing={handleToggleCameraFacing}
             availableDevices={availableDevices}
+            classifiedDevices={classifiedDevices}
             selectedDeviceId={selectedDeviceId}
             onSelectDeviceId={handleSelectDeviceId}
+            rotationAngle={rotationAngle}
+            onToggleRotation={handleToggleRotation}
+            isLandscape={isPhysicalLandscape}
             isMuted={isMuted}
             onToggleMute={() => {
               const nextMuted = !isMuted;

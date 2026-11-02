@@ -14,12 +14,14 @@ import {
   ScanFace,
   Smartphone,
   RotateCcw,
+  RotateCw,
   RefreshCw,
   Trash2,
   Users,
   Wifi,
 } from 'lucide-react';
 import { AppStage, CalledFaceRecord, DetectedFace, MainViewMode } from '../types';
+import { CameraDeviceInfo } from '../utils/cameraUtils';
 import { sound } from '../utils/audio';
 
 interface ControlPanelProps {
@@ -35,8 +37,12 @@ interface ControlPanelProps {
   cameraFacing: 'environment' | 'user';
   onToggleCameraFacing: () => void;
   availableDevices: MediaDeviceInfo[];
+  classifiedDevices?: CameraDeviceInfo[];
   selectedDeviceId: string;
   onSelectDeviceId: (id: string) => void;
+  rotationAngle?: number;
+  onToggleRotation?: () => void;
+  isLandscape?: boolean;
   isMuted: boolean;
   onToggleMute: () => void;
   isFullscreen: boolean;
@@ -53,7 +59,7 @@ interface ControlPanelProps {
   torchActive?: boolean;
   onToggleTorch?: () => void;
   hasTorch?: boolean;
-  // NEW FEATURES
+  // MODES
   mainViewMode: MainViewMode;
   onSetMainViewMode: (mode: MainViewMode) => void;
   onOpenRemoteConnect: () => void;
@@ -75,8 +81,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   cameraFacing,
   onToggleCameraFacing,
   availableDevices,
+  classifiedDevices = [],
   selectedDeviceId,
   onSelectDeviceId,
+  rotationAngle = 0,
+  onToggleRotation,
+  isLandscape = false,
   isMuted,
   onToggleMute,
   isFullscreen,
@@ -124,6 +134,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Horizontal / Landscape Rotate Button in header */}
+            {onToggleRotation && (
+              <button
+                onClick={() => {
+                  onToggleRotation();
+                  sound.playClick();
+                }}
+                title="Xoay điện thoại chiều ngang (Toàn cảnh lớp)"
+                className={`p-2 rounded-lg border transition-all ${
+                  rotationAngle !== 0 || isLandscape
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.4)]'
+                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-amber-300'
+                }`}
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            )}
+
             <button
               onClick={() => {
                 onToggleMute();
@@ -365,13 +393,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         )}
 
-        {/* CAMERA CONTROLS: Switch Camera, Device Selector, Torch */}
+        {/* CAMERA CONTROLS: Switch Camera, Device Selector, Torch, Rotation */}
         {mainViewMode === 'camera' && (
           <div className="mb-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between text-xs font-cyber text-slate-400 mb-2">
               <div className="flex items-center gap-1.5">
                 <Camera className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Camera thiết bị:</span>
+                <span>Cấu hình Camera:</span>
               </div>
               {hasTorch && onToggleTorch && (
                 <button
@@ -401,19 +429,50 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </span>
             </button>
 
-            {/* Device list if multiple cameras detected */}
-            {availableDevices.length > 1 && (
+            {/* Landscape / Rotation Quick Action Button */}
+            {onToggleRotation && (
+              <button
+                onClick={() => {
+                  onToggleRotation();
+                  sound.playClick();
+                }}
+                className={`w-full py-2 px-3 mb-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all border ${
+                  rotationAngle !== 0 || isLandscape
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-200 shadow-sm'
+                    : 'bg-slate-850 hover:bg-slate-800 border-slate-700 text-slate-300'
+                }`}
+              >
+                <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                <span>
+                  {rotationAngle !== 0
+                    ? `Đang xoay màn hình ${rotationAngle}° (Bấm để xoay tiếp)`
+                    : 'Xoay điện thoại chiều ngang (Toàn cảnh lớp)'}
+                </span>
+              </button>
+            )}
+
+            {/* Device list with Vietnamese parsed labels */}
+            {(classifiedDevices.length > 1 || availableDevices.length > 1) && (
               <div className="mb-2">
+                <label className="block text-[10px] text-slate-400 mb-1">
+                  Chọn ống kính camera:
+                </label>
                 <select
                   value={selectedDeviceId}
                   onChange={(e) => onSelectDeviceId(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-lg p-2 focus:outline-none focus:border-cyan-400"
                 >
-                  {availableDevices.map((dev, idx) => (
-                    <option key={dev.deviceId || idx} value={dev.deviceId}>
-                      {dev.label || `Camera ${idx + 1}`}
-                    </option>
-                  ))}
+                  {classifiedDevices.length > 0
+                    ? classifiedDevices.map((dev, idx) => (
+                        <option key={dev.deviceId || idx} value={dev.deviceId}>
+                          {dev.displayLabel}
+                        </option>
+                      ))
+                    : availableDevices.map((dev, idx) => (
+                        <option key={dev.deviceId || idx} value={dev.deviceId}>
+                          {dev.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
                 </select>
               </div>
             )}
