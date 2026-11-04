@@ -21,6 +21,7 @@ import {
   MainViewMode,
 } from './types';
 import { detectClassroomFaces } from './utils/faceDetector';
+import { cropStudentFacePortrait } from './utils/faceCropUtils';
 import { sound } from './utils/audio';
 import {
   History,
@@ -83,6 +84,7 @@ export default function App() {
   const [highlightedFaceId, setHighlightedFaceId] = useState<number | null>(null);
   const [lockedFace, setLockedFace] = useState<DetectedFace | null>(null);
   const [lockedFaceUrl, setLockedFaceUrl] = useState<string | null>(null);
+  const [lockedOverviewUrl, setLockedOverviewUrl] = useState<string | null>(null);
   const [lockedStudentName, setLockedStudentName] = useState<string | undefined>(undefined);
   const [currentScore, setCurrentScore] = useState<number>(0);
 
@@ -477,61 +479,34 @@ export default function App() {
     }
   };
 
-  // High-fidelity square portrait crop from video or custom photo
-  const cropFaceFromFeed = useCallback((face: DetectedFace): string | null => {
-    try {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
+  // High-resolution portrait crop and classroom overview locator
+  const cropFaceFromFeed = useCallback(
+    (face: DetectedFace): { faceUrl: string; overviewUrl: string | null } | null => {
+      try {
+        let sourceEl: HTMLVideoElement | HTMLImageElement | null = null;
 
-      let sourceEl: CanvasImageSource | null = null;
-      let srcW = 0;
-      let srcH = 0;
+        if (customPhotoUrl && imgRef.current && imgRef.current.naturalWidth) {
+          sourceEl = imgRef.current;
+        } else if (videoRef.current && videoRef.current.readyState >= 2) {
+          sourceEl = videoRef.current;
+        }
 
-      if (customPhotoUrl && imgRef.current && imgRef.current.naturalWidth) {
-        sourceEl = imgRef.current;
-        srcW = imgRef.current.naturalWidth;
-        srcH = imgRef.current.naturalHeight;
-      } else if (videoRef.current && videoRef.current.readyState >= 2) {
-        sourceEl = videoRef.current;
-        srcW = videoRef.current.videoWidth;
-        srcH = videoRef.current.videoHeight;
+        if (!sourceEl) return null;
+
+        const res = cropStudentFacePortrait(sourceEl, face);
+        if (!res) return null;
+
+        return {
+          faceUrl: res.facePhotoUrl,
+          overviewUrl: res.classroomOverviewUrl,
+        };
+      } catch (e) {
+        console.error('Face crop error:', e);
+        return null;
       }
-
-      if (!sourceEl || srcW === 0 || srcH === 0) return null;
-
-      const facePxX = (face.x / 100) * srcW;
-      const facePxY = (face.y / 100) * srcH;
-      const facePxW = (face.width / 100) * srcW;
-      const facePxH = (face.height / 100) * srcH;
-
-      const cx = facePxX + facePxW / 2;
-      const cy = facePxY + facePxH / 2;
-      const cropSize = Math.max(facePxW, facePxH) * 1.15;
-
-      let sx = cx - cropSize / 2;
-      let sy = cy - cropSize * 0.50;
-      let sw = cropSize;
-      let sh = cropSize;
-
-      if (sx < 0) sx = 0;
-      if (sy < 0) sy = 0;
-      if (sx + sw > srcW) sw = srcW - sx;
-      if (sy + sh > srcH) sh = srcH - sy;
-
-      const finalSize = Math.max(40, Math.min(sw, sh));
-
-      canvas.width = 480;
-      canvas.height = 480;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(sourceEl, sx, sy, finalSize, finalSize, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg', 0.95);
-    } catch (e) {
-      console.error('Face crop error:', e);
-      return null;
-    }
-  }, [customPhotoUrl]);
+    },
+    [customPhotoUrl]
+  );
 
   // RUN FACE DETECTION ON CURRENT LIVE FEED OR CUSTOM PHOTO
   const runFaceDetection = useCallback(async (silent: boolean = false) => {
@@ -623,9 +598,10 @@ export default function App() {
           } else if (data.type === 'stage-change' && data.payload?.stage === 'picking') {
             handleStartPick();
           } else if (data.type === 'face-locked') {
-            const { face, faceUrl } = data.payload;
+            const { face, faceUrl, overviewUrl } = data.payload;
             setLockedFace(face);
             setLockedFaceUrl(faceUrl);
+            setLockedOverviewUrl(overviewUrl || null);
             setLockedStudentName(undefined);
             setAppStage('locked');
             setIsModalOpen(true);
@@ -768,6 +744,7 @@ export default function App() {
     setAppStage('picking');
     setLockedFace(null);
     setLockedFaceUrl(null);
+    setLockedOverviewUrl(null);
     setLockedStudentName(undefined);
     setIsModalOpen(false);
     setCurrentScore(0);
@@ -811,20 +788,24 @@ export default function App() {
         );
 
         setTimeout(() => {
-          const croppedUrl = cropFaceFromFeed(winner);
-          setLockedFaceUrl(croppedUrl);
+          const cropped = cropFaceFromFeed(winner);
+          if (cropped) {
+            setLockedFaceUrl(cropped.faceUrl);
+            setLockedOverviewUrl(cropped.overviewUrl);
 
-          if (croppedUrl) {
             const now = new Date();
             const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
             const newRecord: CalledFaceRecord = {
               id: Date.now().toString(),
-              facePhotoUrl: croppedUrl,
+              facePhotoUrl: cropped.faceUrl,
               time: timeStr,
               faceId: winner.id,
               score: 0,
             };
             setCallHistory((prev) => [newRecord, ...prev]);
+          } else {
+            setLockedFaceUrl(null);
+            setLockedOverviewUrl(null);
           }
 
           setIsModalOpen(true);
@@ -1228,6 +1209,7 @@ export default function App() {
       <LockedStudentModal
         isOpen={isModalOpen}
         facePhotoUrl={lockedFaceUrl}
+        overviewPhotoUrl={lockedOverviewUrl}
         targetBox={lockedFace}
         studentName={lockedStudentName}
         score={currentScore}

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { DetectedFace, AppStage } from '../types';
 import { detectClassroomFaces } from '../utils/faceDetector';
+import { cropStudentFacePortrait } from '../utils/faceCropUtils';
 import { sound } from '../utils/audio';
 import {
   classifyCameraDevice,
@@ -64,6 +65,7 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
   const [appStage, setAppStage] = useState<AppStage>('ready');
   const [lockedFace, setLockedFace] = useState<DetectedFace | null>(null);
   const [lockedFaceUrl, setLockedFaceUrl] = useState<string | null>(null);
+  const [lockedOverviewUrl, setLockedOverviewUrl] = useState<string | null>(null);
   const [cameraStatusMsg, setCameraStatusMsg] = useState<string>('Đang mở Camera Sau...');
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -103,47 +105,16 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
     [roomId]
   );
 
-  // Crop face from feed with centered portrait framing
-  const cropFace = useCallback((face: DetectedFace): string | null => {
+  // Crop face from full uncompressed feed with balanced magnification & clarity
+  const cropFace = useCallback((face: DetectedFace): { faceUrl: string; overviewUrl: string | null } | null => {
     try {
       if (!videoRef.current || videoRef.current.readyState < 2) return null;
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-
-      const srcW = videoRef.current.videoWidth;
-      const srcH = videoRef.current.videoHeight;
-      if (!srcW || !srcH) return null;
-
-      const facePxX = (face.x / 100) * srcW;
-      const facePxY = (face.y / 100) * srcH;
-      const facePxW = (face.width / 100) * srcW;
-      const facePxH = (face.height / 100) * srcH;
-
-      const cx = facePxX + facePxW / 2;
-      const cy = facePxY + facePxH / 2;
-      // Centered portrait framing
-      const cropSize = Math.max(facePxW, facePxH) * 1.15;
-
-      let sx = cx - cropSize / 2;
-      let sy = cy - cropSize * 0.50;
-      let sw = cropSize;
-      let sh = cropSize;
-
-      if (sx < 0) sx = 0;
-      if (sy < 0) sy = 0;
-      if (sx + sw > srcW) sw = srcW - sx;
-      if (sy + sh > srcH) sh = srcH - sy;
-
-      const finalSize = Math.max(40, Math.min(sw, sh));
-      canvas.width = 480;
-      canvas.height = 480;
-
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(videoRef.current, sx, sy, finalSize, finalSize, 0, 0, canvas.width, canvas.height);
-
-      return canvas.toDataURL('image/jpeg', 0.95);
+      const res = cropStudentFacePortrait(videoRef.current, face);
+      if (!res) return null;
+      return {
+        faceUrl: res.facePhotoUrl,
+        overviewUrl: res.classroomOverviewUrl,
+      };
     } catch {
       return null;
     }
@@ -485,14 +456,18 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
         setAppStage('locked');
         sound.playTargetLocked();
 
-        const croppedUrl = cropFace(winner);
-        setLockedFaceUrl(croppedUrl);
+        const cropRes = cropFace(winner);
+        if (cropRes) {
+          setLockedFaceUrl(cropRes.faceUrl);
+          setLockedOverviewUrl(cropRes.overviewUrl);
 
-        // Notify Desktop PC immediately!
-        sendRoomEvent('face-locked', {
-          face: winner,
-          faceUrl: croppedUrl,
-        });
+          // Notify Desktop PC immediately with both faceUrl and overviewUrl!
+          sendRoomEvent('face-locked', {
+            face: winner,
+            faceUrl: cropRes.faceUrl,
+            overviewUrl: cropRes.overviewUrl,
+          });
+        }
       }
     };
 

@@ -117,36 +117,117 @@ export function runCascade(
 
 export function clusterDetections(
   dets: Array<[number, number, number, number]>,
-  iouthreshold: number
+  iouthreshold: number = 0.2
 ): Array<[number, number, number, number]> {
+  if (dets.length === 0) return [];
+  // Sort descending by detection confidence score
   dets = dets.sort((a, b) => b[3] - a[3]);
 
   function calculateIou(det1: [number, number, number, number], det2: [number, number, number, number]) {
     const r1 = det1[0], c1 = det1[1], s1 = det1[2];
     const r2 = det2[0], c2 = det2[1], s2 = det2[2];
-    const overr = Math.max(0, Math.min(r1 + s1 / 2, r2 + s2 / 2) - Math.max(r1 - s1 / 2, r2 - s2 / 2));
-    const overc = Math.max(0, Math.min(c1 + s1 / 2, c2 + s2 / 2) - Math.max(c1 - s1 / 2, c2 - s2 / 2));
-    return (overr * overc) / (s1 * s1 + s2 * s2 - overr * overc);
+    const half1 = s1 / 2;
+    const half2 = s2 / 2;
+    const overr = Math.max(0, Math.min(r1 + half1, r2 + half2) - Math.max(r1 - half1, r2 - half2));
+    const overc = Math.max(0, Math.min(c1 + half1, c2 + half2) - Math.max(c1 - half1, c2 - half2));
+    const inter = overr * overc;
+    if (inter <= 0) return 0;
+    const union = s1 * s1 + s2 * s2 - inter;
+    return union > 0 ? inter / union : 0;
   }
 
-  const assignments = new Array(dets.length).fill(0);
+  const assignments = new Uint8Array(dets.length);
   const clusters: Array<[number, number, number, number]> = [];
 
   for (let i = 0; i < dets.length; ++i) {
-    if (assignments[i] === 0) {
-      let r = 0.0, c = 0.0, s = 0.0, q = 0.0, n = 0;
-      for (let j = i; j < dets.length; ++j) {
-        if (calculateIou(dets[i], dets[j]) > iouthreshold) {
-          assignments[j] = 1;
-          r += dets[j][0];
-          c += dets[j][1];
-          s += dets[j][2];
-          q += dets[j][3];
-          n += 1;
-        }
+    if (assignments[i] === 1) continue;
+    assignments[i] = 1;
+
+    let r = dets[i][0];
+    let c = dets[i][1];
+    let s = dets[i][2];
+    let q = dets[i][3];
+    let n = 1;
+
+    for (let j = i + 1; j < dets.length; ++j) {
+      if (assignments[j] === 1) continue;
+      const iou = calculateIou(dets[i], dets[j]);
+      const dist = Math.hypot(dets[i][0] - dets[j][0], dets[i][1] - dets[j][1]);
+      const minS = Math.min(dets[i][2], dets[j][2]);
+
+      // Merge if IoU is high OR centers are tightly clustered within the smaller box
+      if (iou > iouthreshold || dist < minS * 0.35) {
+        assignments[j] = 1;
+        r += dets[j][0];
+        c += dets[j][1];
+        s += dets[j][2];
+        q += dets[j][3];
+        n += 1;
       }
-      clusters.push([r / n, c / n, s / n, q]);
+    }
+    // Record cluster: [average row, average col, average size, accumulated score]
+    clusters.push([r / n, c / n, s / n, q]);
+  }
+
+  // SECOND PASS: Strict Cross-Scale Non-Maximum Suppression (NMS)
+  // Ensures ONE clean bounding box per student face across all scales (near to far)
+  return suppressOverlappingFaces(clusters);
+}
+
+/**
+ * Cross-scale Non-Maximum Suppression (NMS)
+ * Merges duplicate or nested boxes covering the same student head.
+ */
+export function suppressOverlappingFaces(
+  boxes: Array<[number, number, number, number]>
+): Array<[number, number, number, number]> {
+  if (boxes.length <= 1) return boxes;
+  // Sort descending by score
+  const sorted = [...boxes].sort((a, b) => b[3] - a[3]);
+  const kept: Array<[number, number, number, number]> = [];
+
+  for (const box of sorted) {
+    const [r, c, s, q] = box;
+    const half = s / 2;
+
+    let isDuplicate = false;
+    for (let k = 0; k < kept.length; k++) {
+      const [kr, kc, ks, kq] = kept[k];
+      const kHalf = ks / 2;
+
+      // Center distance
+      const centerDist = Math.hypot(r - kr, c - kc);
+      const minS = Math.min(s, ks);
+      const maxS = Math.max(s, ks);
+
+      // Check center containment: is one center inside the other box?
+      const insideK = Math.abs(r - kr) < kHalf && Math.abs(c - kc) < kHalf;
+      const insideBox = Math.abs(kr - r) < half && Math.abs(kc - c) < half;
+
+      // Check IoU
+      const overr = Math.max(0, Math.min(r + half, kr + kHalf) - Math.max(r - half, kr - kHalf));
+      const overc = Math.max(0, Math.min(c + half, kc + kHalf) - Math.max(c - half, kc - kHalf));
+      const inter = overr * overc;
+      const union = s * s + ks * ks - inter;
+      const iou = union > 0 ? inter / union : 0;
+
+      // Conditions for being the same student:
+      // 1. Center distance is less than 50% of the larger box
+      // 2. Either center is inside the other box
+      // 3. IoU > 0.18
+      if (centerDist < maxS * 0.50 || centerDist < minS * 0.70 || insideK || insideBox || iou > 0.18) {
+        isDuplicate = true;
+        // Reinforce confidence score of the kept face
+        kept[k][3] = Math.max(kq, q) + Math.min(kq, q) * 0.3;
+        break;
+      }
+    }
+
+    if (!isDuplicate) {
+      kept.push([r, c, s, q]);
     }
   }
-  return clusters;
+
+  return kept;
 }
+
