@@ -332,15 +332,23 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
   useEffect(() => {
     if (!cameraActive) return;
 
-    // Scan faces every 1.2 seconds
+    // Continuous automatic face detection every 500ms
+    let isDetectingBusy = false;
     const faceInterval = setInterval(async () => {
+      if (isDetectingBusy) return;
       if (videoRef.current && videoRef.current.readyState >= 2 && appStage === 'ready') {
-        const faces = await detectClassroomFaces(videoRef.current);
-        const mapped = faces.map((f, i) => ({ ...f, id: i + 1 }));
-        setDetectedFaces(mapped);
-        sendRoomEvent('faces-updated', { faces: mapped });
+        isDetectingBusy = true;
+        try {
+          const faces = await detectClassroomFaces(videoRef.current);
+          setDetectedFaces(faces);
+          sendRoomEvent('faces-updated', { faces });
+        } catch {
+          // ignore detection glitch
+        } finally {
+          isDetectingBusy = false;
+        }
       }
-    }, 1200);
+    }, 500);
 
     // Send video snapshot to desktop PC every 750ms
     const frameInterval = setInterval(() => {
@@ -526,16 +534,6 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
 
         {/* Right Action Icons Toolbar */}
         <div className="flex items-center gap-1 sm:gap-1.5">
-          {/* SNAPSHOT PHOTO SCAN BUTTON */}
-          <button
-            onClick={handleTriggerSnapshot}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 text-slate-950 text-xs font-cyber font-black transition-all shadow-[0_0_12px_rgba(34,197,94,0.5)] active:scale-95"
-            title="Chụp ảnh toàn lớp để nhận diện học sinh"
-          >
-            <Camera className="w-3.5 h-3.5 text-slate-950" />
-            <span className="inline">Chụp Lớp</span>
-          </button>
-
           {/* HORIZONTAL / LANDSCAPE ROTATE BUTTON (Xoay điện thoại chiều ngang) */}
           <button
             onClick={handleToggleLandscape}

@@ -569,12 +569,19 @@ export default function App() {
     }
   }, [customPhotoUrl, callHistory]);
 
-  // Periodic background check as camera moves
+  // Continuous real-time automatic face detection (runs automatically every 600ms)
   useEffect(() => {
     if (!cameraActive || appStage !== 'ready' || mainViewMode !== 'camera') return;
-    const interval = setInterval(() => {
-      runFaceDetection(true);
-    }, 1500);
+    let isDetectingBusy = false;
+    const interval = setInterval(async () => {
+      if (isDetectingBusy || appStage !== 'ready') return;
+      isDetectingBusy = true;
+      try {
+        await runFaceDetection(true);
+      } finally {
+        isDetectingBusy = false;
+      }
+    }, 600);
     return () => clearInterval(interval);
   }, [cameraActive, appStage, mainViewMode, runFaceDetection]);
 
@@ -595,8 +602,18 @@ export default function App() {
           } else if (data.type === 'frame-update' && data.payload?.frame) {
             setRemoteFrame(data.payload.frame);
             setIsPhoneConnected(true);
+            if (mainViewMode === 'remote-camera' && appStage === 'ready') {
+              const img = new Image();
+              img.src = data.payload.frame;
+              img.onload = async () => {
+                const faces = await detectClassroomFaces(img);
+                if (faces.length > 0) {
+                  setDetectedFaces(faces);
+                }
+              };
+            }
           } else if (data.type === 'faces-updated' && data.payload?.faces) {
-            if (mainViewMode === 'remote-camera') {
+            if (mainViewMode === 'remote-camera' && data.payload.faces.length > 0) {
               setDetectedFaces(data.payload.faces);
             }
           } else if (data.type === 'stage-change' && data.payload?.stage === 'picking') {
@@ -1062,15 +1079,6 @@ export default function App() {
           {/* Floating Action Buttons top left of video stage */}
           {mainViewMode === 'camera' && (
             <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => runFaceDetection(false)}
-                title="Chụp ảnh toàn thể lớp học để nhận diện khuôn mặt từng học sinh"
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 text-slate-950 font-black px-3.5 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-[0_0_15px_rgba(34,197,94,0.5)] active:scale-95"
-              >
-                <Camera className="w-3.5 h-3.5 text-slate-950" />
-                <span>Chụp ảnh lớp & Quét</span>
-              </button>
-
               <button
                 onClick={handleToggleCameraFacing}
                 title="Đổi Camera Trước / Sau"

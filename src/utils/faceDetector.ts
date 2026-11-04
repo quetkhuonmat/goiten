@@ -40,11 +40,9 @@ function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number):
 }
 
 /**
- * Validates facial structure & rejects false positives on walls, wooden doors, shirts, and curtains.
- * A genuine student face has:
- * 1. Natural skin chromaticity cluster (excluding plain wood, clothing, chalkboard)
- * 2. Facial luminance variance (eyes, brows, mouth create distinct contrast)
- * 3. Horizontal eye-band / forehead contrast profile
+ * Validates facial structure and rejects obvious false positives (walls, doors, empty uniforms).
+ * Designed for diverse classroom conditions: fluorescent lighting, students with masks,
+ * bangs/hair, glasses, and distant rows.
  */
 function verifyFacialStructure(
   rgba: Uint8ClampedArray,
@@ -63,103 +61,63 @@ function verifyFacialStructure(
 
   const boxW = endX - startX;
   const boxH = endY - startY;
-  if (boxW < 12 || boxH < 12) return false;
+  if (boxW < 10 || boxH < 10) return false;
 
-  let skinPixels = 0;
+  let faceFeaturePixels = 0;
   let totalSampled = 0;
   let sumLuminance = 0;
   let sumSqLuminance = 0;
 
-  let upperSum = 0;
-  let upperCount = 0;
-  let midSum = 0;
-  let midCount = 0;
-  let lowerSum = 0;
-  let lowerCount = 0;
-
-  const step = Math.max(1, Math.floor(size / 18));
+  const step = Math.max(1, Math.floor(size / 16));
 
   for (let y = startY; y < endY; y += step) {
-    const relY = (y - startY) / boxH; // 0.0 to 1.0 from top of head to chin
     for (let x = startX; x < endX; x += step) {
       const idx = (y * imgWidth + x) * 4;
       const r = rgba[idx];
       const g = rgba[idx + 1];
       const b = rgba[idx + 2];
-
       const lum = gray[y * imgWidth + x];
+
       totalSampled++;
       sumLuminance += lum;
       sumSqLuminance += lum * lum;
 
-      // Forehead band (top 15% - 35%)
-      if (relY >= 0.15 && relY < 0.35) {
-        upperSum += lum;
-        upperCount++;
-      }
-      // Eye & nose band (35% - 65%)
-      else if (relY >= 0.35 && relY < 0.65) {
-        midSum += lum;
-        midCount++;
-      }
-      // Chin & mouth band (65% - 90%)
-      else if (relY >= 0.65 && relY < 0.90) {
-        lowerSum += lum;
-        lowerCount++;
-      }
-
-      // Check for human skin chromaticity
-      // Excludes pure white shirts, dark blue/black clothing, bright yellow/red toys
-      const isSkinRgb =
-        r > 50 &&
-        g > 35 &&
-        b > 25 &&
-        r > g &&
-        g >= b &&
-        r - g >= 6 &&
-        r - b >= 10 &&
-        r < 248; // not blown out highlight
-
-      // YCbCr skin tone transformation
+      // 1. Check human skin tones (RGB and YCbCr with classroom light tolerance)
+      const isSkinRgb = r > 40 && g > 25 && b > 15 && r >= g * 0.8 && r >= b * 0.9;
       const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
       const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-      const isSkinYCbCr = cb >= 75 && cb <= 130 && cr >= 132 && cr <= 175;
+      const isSkinYCbCr = cb >= 68 && cb <= 142 && cr >= 122 && cr <= 186;
 
-      if (isSkinRgb || isSkinYCbCr) {
-        skinPixels++;
+      // 2. Check facial features (eyes, eyebrows, dark hair, shadows under nose/lips)
+      const isFacialFeature = lum < 78;
+
+      if (isSkinRgb || isSkinYCbCr || isFacialFeature) {
+        faceFeaturePixels++;
       }
     }
   }
 
-  if (totalSampled < 16) return false;
+  if (totalSampled < 8) return false;
 
-  // 1. Skin ratio: true face box must have at least 22% skin pixels
-  // (Plain doors, walls, chalkboards, uniforms have < 10%)
-  const skinRatio = skinPixels / totalSampled;
-  if (skinRatio < 0.22) {
-    return false;
-  }
-
-  // 2. Luminance standard deviation:
-  // Flat walls, whiteboard panels, or wooden doors have very low variance (std < 10)
+  // Rejection 1: Flat uniform surfaces (blank walls, whiteboard, chalkboard, door panels)
   const meanLum = sumLuminance / totalSampled;
   const variance = sumSqLuminance / totalSampled - meanLum * meanLum;
   const stdDev = Math.sqrt(Math.max(0, variance));
 
-  if (stdDev < 12.0) {
-    // Too flat/uniform (plain wall, cabinet panel, chalkboard)
+  if (stdDev < 4.8) {
+    // Pure flat surface without facial texture
     return false;
   }
 
-  // 3. Eye/Forehead Contrast Pattern:
-  // On human faces, eyes and eyebrows create a darker middle region compared to upper forehead
-  if (upperCount > 0 && midCount > 0) {
-    const avgUpper = upperSum / upperCount;
-    const avgMid = midSum / midCount;
-    // If middle is suspiciously 30% brighter than forehead, it's not a standard face lighting
-    if (avgMid > avgUpper * 1.35) {
-      return false;
-    }
+  // Rejection 2: Pitch black void or pure blinding glare
+  if (meanLum < 12 || (meanLum > 246 && stdDev < 8)) {
+    return false;
+  }
+
+  // Rejection 3: True faces must contain at least some skin or facial hair/eyes
+  const featureRatio = faceFeaturePixels / totalSampled;
+  if (featureRatio < 0.08) {
+    return false;
   }
 
   return true;
@@ -167,7 +125,6 @@ function verifyFacialStructure(
 
 /**
  * Natural head portrait box framing from hairline to chin and cheek to cheek.
- * Accurately fits student face without arbitrary distortion or massive oversized padding.
  */
 function createAccurateHeadBox(
   cx: number,
@@ -176,21 +133,15 @@ function createAccurateHeadBox(
   frameW: number,
   frameH: number
 ): { x: number; y: number; width: number; height: number } {
-  // Detector covers internal facial features
-  // Frame width: 1.15x detector size (captures ears & cheeks)
-  // Frame height: 1.28x detector size (captures hair down to chin)
   const boxW = size * 1.15;
   const boxH = size * 1.28;
 
-  // Center horizontally, shift up slightly so hairline and forehead are inside
   let boxX = cx - boxW / 2;
   let boxY = cy - boxH * 0.52;
 
-  // Clamp within image bounds
   boxX = Math.max(0, Math.min(frameW - boxW, boxX));
   boxY = Math.max(0, Math.min(frameH - boxH, boxY));
 
-  // Convert to percentage (0 - 100)
   const x = Math.max(0, (boxX / frameW) * 100);
   const y = Math.max(0, (boxY / frameH) * 100);
   const w = Math.min(100 - x, (boxW / frameW) * 100);
@@ -202,6 +153,68 @@ function createAccurateHeadBox(
     width: Number(w.toFixed(2)),
     height: Number(h.toFixed(2)),
   };
+}
+
+/**
+ * Calculate Intersection over Union (IoU) between two face detections
+ */
+function computeIoU(
+  a: [number, number, number, number],
+  b: [number, number, number, number]
+): number {
+  const r1 = a[0], c1 = a[1], s1 = a[2];
+  const r2 = b[0], c2 = b[1], s2 = b[2];
+
+  const left1 = c1 - s1 / 2;
+  const top1 = r1 - s1 / 2;
+  const right1 = c1 + s1 / 2;
+  const bottom1 = r1 + s1 / 2;
+
+  const left2 = c2 - s2 / 2;
+  const top2 = r2 - s2 / 2;
+  const right2 = c2 + s2 / 2;
+  const bottom2 = r2 + s2 / 2;
+
+  const xLeft = Math.max(left1, left2);
+  const yTop = Math.max(top1, top2);
+  const xRight = Math.min(right1, right2);
+  const yBottom = Math.min(bottom1, bottom2);
+
+  if (xRight <= xLeft || yBottom <= yTop) return 0;
+
+  const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+  const area1 = s1 * s1;
+  const area2 = s2 * s2;
+  const unionArea = area1 + area2 - intersectionArea;
+
+  return unionArea > 0 ? intersectionArea / unionArea : 0;
+}
+
+/**
+ * Suppress overlapping/duplicate bounding boxes (Non-Maximum Suppression)
+ */
+function suppressDuplicateFaces(
+  faces: Array<[number, number, number, number]>,
+  iouThreshold = 0.35
+): Array<[number, number, number, number]> {
+  // Sort descending by score
+  const sorted = [...faces].sort((a, b) => b[3] - a[3]);
+  const selected: Array<[number, number, number, number]> = [];
+
+  for (const candidate of sorted) {
+    let overlap = false;
+    for (const kept of selected) {
+      if (computeIoU(candidate, kept) > iouThreshold) {
+        overlap = true;
+        break;
+      }
+    }
+    if (!overlap) {
+      selected.push(candidate);
+    }
+  }
+
+  return selected;
 }
 
 /**
@@ -232,8 +245,8 @@ export async function detectClassroomFaces(
       if (faces && faces.length > 0) {
         // Sort systematic seating order: row by row (top to bottom), left to right
         const sorted = [...faces].sort((a, b) => {
-          const rowA = Math.round(a.boundingBox.y / 60);
-          const rowB = Math.round(b.boundingBox.y / 60);
+          const rowA = Math.round(a.boundingBox.y / 50);
+          const rowB = Math.round(b.boundingBox.y / 50);
           if (rowA !== rowB) return rowA - rowB;
           return a.boundingBox.x - b.boundingBox.x;
         });
@@ -257,13 +270,13 @@ export async function detectClassroomFaces(
     }
   }
 
-  // 2. High-Precision Multi-Scale Cascade with Texture & Skin Verification
+  // 2. High-Speed Multi-Scale Pico Cascade
   const classifier = await initPicoClassifier();
   if (!classifier) return [];
 
   const canvas = document.createElement('canvas');
-  // Process at 1280px width to preserve small distant faces in middle/back classroom rows
-  const targetW = Math.min(width, 1280);
+  // Optimal balance: 720px width for fast 50ms processing & high multi-row detection
+  const targetW = Math.min(width, 760);
   const targetH = Math.round((height / width) * targetW);
   canvas.width = targetW;
   canvas.height = targetH;
@@ -283,27 +296,22 @@ export async function detectClassroomFaces(
       ldim: targetW,
     };
 
-    // Fine-scale parameters covering whole classroom depth (near front row to far back row)
-    // Smallest face: ~22px (back row students far away)
-    // Largest face: ~65% of screen height (front row students up close)
-    const minFacePx = Math.max(22, Math.round(targetW * 0.024));
-    const maxFacePx = Math.round(targetH * 0.65);
+    // Fine-scale parameters covering entire classroom seating depth:
+    // Smallest face: ~16px (far back row students)
+    // Largest face: ~72% of screen height (front row students)
+    const minFacePx = Math.max(16, Math.round(targetW * 0.021));
+    const maxFacePx = Math.round(targetH * 0.72);
 
     const params = {
       shiftfactor: 0.1,
       minsize: minFacePx,
       maxsize: maxFacePx,
-      scalefactor: 1.12, // Dense scale steps ensure no row is missed
+      scalefactor: 1.15,
     };
 
-    let rawDetections = runCascade(imageObj, classifier, params);
+    const rawDetections = runCascade(imageObj, classifier, params);
+    const clustered = clusterDetections(rawDetections, 0.25);
 
-    // Merge multi-scale detections & apply Cross-Scale Non-Maximum Suppression (NMS)
-    // Guarantees ONE clean bounding box per student face
-    const clustered = clusterDetections(rawDetections, 0.20);
-
-    // Filter candidate boxes by score & anatomical face verification
-    // Rejects walls, clothing, doorframes, curtains, and artifacts
     const verifiedFaces: Array<[number, number, number, number]> = [];
 
     for (const det of clustered) {
@@ -312,12 +320,12 @@ export async function detectClassroomFaces(
       const size = det[2];
       const score = det[3];
 
-      // Confidence threshold:
-      // Smaller distant faces need at least 9.0; larger nearby faces need at least 12.0
-      const minConfidence = size < 45 ? 9.0 : 12.0;
+      // Realistic confidence threshold:
+      // Pico cluster scores for real faces are 2.2 to 8.0
+      const minConfidence = size < 35 ? 2.2 : 3.2;
       if (score < minConfidence) continue;
 
-      // Facial anatomy & skin texture verification
+      // Reject flat walls/cabinets
       const isValidFace = verifyFacialStructure(
         imgData.data,
         grayPixels,
@@ -328,22 +336,25 @@ export async function detectClassroomFaces(
         targetH
       );
       if (!isValidFace) {
-        continue; // Discard empty background/walls
+        continue;
       }
 
       verifiedFaces.push(det);
     }
 
-    // Sort faces systematically by classroom seating order:
-    // Row by row (top to bottom, i.e. far to near), left-to-right
-    verifiedFaces.sort((a, b) => {
-      const rowA = Math.round(a[0] / 50);
-      const rowB = Math.round(b[0] / 50);
+    // Apply Non-Maximum Suppression to ensure exactly one box per student
+    const finalFaces = suppressDuplicateFaces(verifiedFaces, 0.35);
+
+    // Sort systematically by classroom seating order:
+    // Top to bottom (far to near row), left to right
+    finalFaces.sort((a, b) => {
+      const rowA = Math.round(a[0] / 45);
+      const rowB = Math.round(b[0] / 45);
       if (rowA !== rowB) return rowA - rowB;
       return a[1] - b[1];
     });
 
-    return verifiedFaces.map((det, idx) => {
+    return finalFaces.map((det, idx) => {
       const row = det[0];
       const col = det[1];
       const size = det[2];

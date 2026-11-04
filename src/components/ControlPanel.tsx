@@ -175,151 +175,62 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         </div>
 
-        {/* 3 MODE TABS: Camera Trực Tiếp | Album Ảnh Cả Lớp | Camera Điện Thoại */}
-        <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-cyan-500/30 mb-3">
+        {/* Compact Quick Utilities in Header */}
+        <div className="flex items-center gap-1.5 mb-3 bg-slate-950/60 p-1.5 rounded-xl border border-cyan-500/20">
           <button
             onClick={() => {
-              onSetMainViewMode('camera');
+              onOpenRemoteConnect();
               sound.playClick();
             }}
-            className={`py-1.5 px-1 rounded-lg text-[11px] font-cyber transition-all flex flex-col items-center justify-center gap-0.5 ${
-              mainViewMode === 'camera'
-                ? 'bg-cyan-500/25 border border-cyan-400 text-cyan-300 font-bold shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            title="Kết nối camera điện thoại không dây qua mã QR"
+            className="flex-1 py-1.5 px-2 bg-slate-800/80 hover:bg-slate-700 text-cyan-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all"
           >
-            <Camera className="w-3.5 h-3.5" />
-            <span>Camera</span>
+            <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="truncate">Kết nối ĐT</span>
+            {isPhoneConnected && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
           </button>
 
           <button
             onClick={() => {
-              onSetMainViewMode('album');
+              onOpenClassAlbum();
               sound.playClick();
             }}
-            className={`py-1.5 px-1 rounded-lg text-[11px] font-cyber transition-all flex flex-col items-center justify-center gap-0.5 relative ${
-              mainViewMode === 'album'
-                ? 'bg-emerald-500/25 border border-emerald-400 text-emerald-300 font-bold shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            title="Quản lý album ảnh học sinh"
+            className="py-1.5 px-2.5 bg-slate-800/80 hover:bg-slate-700 text-indigo-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all"
           >
-            <Users className="w-3.5 h-3.5" />
-            <span>Album lớp</span>
-            {studentsCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-500 text-slate-950 rounded-full text-[9px] font-bold flex items-center justify-center">
-                {studentsCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              onSetMainViewMode('remote-camera');
-              sound.playClick();
-            }}
-            className={`py-1.5 px-1 rounded-lg text-[11px] font-cyber transition-all flex flex-col items-center justify-center gap-0.5 relative ${
-              mainViewMode === 'remote-camera'
-                ? 'bg-teal-500/25 border border-teal-400 text-teal-300 font-bold shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            <span>Camera ĐT</span>
-            {isPhoneConnected && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            )}
+            <Users className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Album ({studentsCount})</span>
           </button>
         </div>
 
-        {/* FEATURE 2 HIGHLIGHT: DÙNG ĐIỆN THOẠI KẾT NỐI VỚI MÁY TÍNH BÀN */}
-        <button
-          onClick={() => {
-            onOpenRemoteConnect();
-            sound.playClick();
-          }}
-          className={`w-full mb-2.5 py-2.5 px-3 border rounded-xl text-xs font-semibold flex items-center justify-between shadow-md transition-all group ${
-            isPhoneConnected
-              ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-300'
-              : 'bg-gradient-to-r from-teal-950 via-slate-900 to-cyan-950 hover:from-teal-900 border-cyan-400/60 text-cyan-200'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <Wifi className={`w-4 h-4 ${isPhoneConnected ? 'text-emerald-400 animate-pulse' : 'text-cyan-400'}`} />
-            <div className="text-left">
-              <div className="font-bold">
-                {isPhoneConnected ? 'Điện thoại đã kết nối làm Camera ✓' : '📱 Kết nối Camera Điện thoại'}
-              </div>
-              <div className="text-[10px] text-slate-400">
-                {isPhoneConnected ? 'Đang truyền hình ảnh sang máy tính' : 'Dành cho máy tính bàn (không có webcam)'}
-              </div>
+        {/* Real-Time Automatic Face Detection Status */}
+        <div className="mb-4 bg-slate-950/80 p-3.5 rounded-2xl border border-emerald-500/40 shadow-lg">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-xs font-cyber text-slate-200">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+              <span className="font-bold text-emerald-400">TỰ ĐỘNG NHẬN DIỆN KHUÔN MẶT</span>
             </div>
+            <span className="font-mono text-emerald-300 font-black text-sm px-2.5 py-0.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 shadow-sm">
+              {detectedFaces.length} học sinh
+            </span>
           </div>
-          <span className="text-[10px] bg-cyan-500/20 px-2 py-0.5 rounded text-cyan-300 font-mono">
-            {isPhoneConnected ? 'Đã bật' : 'Mở mã QR'}
-          </span>
-        </button>
 
-        {/* FEATURE 1 HIGHLIGHT: TẢI ẢNH CẢ LỚP (CHỌN NHIỀU FILE CÙNG LÚC) */}
-        <button
-          onClick={() => {
-            onOpenClassAlbum();
-            sound.playClick();
-          }}
-          className="w-full mb-3 py-2.5 px-3 bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 hover:to-slate-800 border border-indigo-400/50 rounded-xl text-indigo-200 text-xs font-semibold flex items-center justify-between shadow-md transition-all group"
-        >
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-            <div className="text-left">
-              <div className="font-bold text-white">📁 Tải ảnh cả lớp (Chọn nhiều file)</div>
-              <div className="text-[10px] text-slate-400">
-                {studentsCount > 0
-                  ? `Đã nạp ${studentsCount} học sinh vào album`
-                  : 'Chọn cùng lúc hàng chục ảnh học sinh'}
-              </div>
-            </div>
-          </div>
-          <span className="text-[10px] bg-indigo-500/20 px-2 py-0.5 rounded text-indigo-300 font-mono">
-            {studentsCount > 0 ? `${studentsCount} ảnh` : 'Nạp ngay'}
-          </span>
-        </button>
+          <p className="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
+            {detectedFaces.length > 0
+              ? `Đang tự động đóng khung ${detectedFaces.length} học sinh trong lớp theo thời gian thực.`
+              : 'Đang hướng camera về phía lớp học để tự động phát hiện và đóng khung khuôn mặt...'}
+          </p>
 
-        {/* Status for Faces in current camera feed */}
-        {mainViewMode !== 'album' && (
-          <div className="mb-3 bg-slate-950/70 p-3 rounded-xl border border-cyan-500/30">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1.5 text-xs font-cyber text-slate-300">
-                <ScanFace className="w-4 h-4 text-emerald-400" />
-                <span>Khuôn mặt đã nhận diện:</span>
-              </div>
-              <span className="font-mono text-emerald-400 font-bold text-sm">
-                {detectedFaces.length} học sinh
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <button
-                onClick={() => {
-                  onDetectFaces();
-                }}
-                disabled={isPicking || isDetecting}
-                className="flex-1 py-2 px-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
-              >
-                <Camera className={`w-3.5 h-3.5 text-slate-950 ${isDetecting ? 'animate-spin' : ''}`} />
-                <span>{isDetecting ? 'Đang chụp & nhận diện...' : '📸 Chụp ảnh lớp & Quét'}</span>
-              </button>
-
-              <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={excludeCalled}
-                  onChange={(e) => onToggleExcludeCalled(e.target.checked)}
-                  className="rounded accent-cyan-400 w-3 h-3"
-                />
-                <span>Không gọi lại</span>
-              </label>
-            </div>
-          </div>
-        )}
+          <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none py-1.5 px-2 rounded-lg bg-slate-900/70 hover:bg-slate-900 border border-slate-800 transition-colors">
+            <input
+              type="checkbox"
+              checked={excludeCalled}
+              onChange={(e) => onToggleExcludeCalled(e.target.checked)}
+              className="rounded accent-emerald-400 w-3.5 h-3.5"
+            />
+            <span>Không gọi lại học sinh đã lên bảng</span>
+          </label>
+        </div>
 
         {/* Phase 2: MAIN BIG ACTION BUTTON - QUAY CHỌN NGẪU NHIÊN */}
         <div className="mb-4">
