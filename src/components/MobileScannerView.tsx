@@ -67,6 +67,7 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
   const [lockedFaceUrl, setLockedFaceUrl] = useState<string | null>(null);
   const [lockedOverviewUrl, setLockedOverviewUrl] = useState<string | null>(null);
   const [cameraStatusMsg, setCameraStatusMsg] = useState<string>('Đang mở Camera Sau...');
+  const [isShutterFlashing, setIsShutterFlashing] = useState<boolean>(false);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -104,6 +105,22 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
     },
     [roomId]
   );
+
+  // Manual or auto classroom snapshot scan
+  const handleTriggerSnapshot = useCallback(async () => {
+    sound.playCameraShutter();
+    setIsShutterFlashing(true);
+    setTimeout(() => setIsShutterFlashing(false), 350);
+
+    if (videoRef.current && videoRef.current.readyState >= 2) {
+      setAppStage('detecting');
+      const faces = await detectClassroomFaces(videoRef.current);
+      const mapped = faces.map((f, i) => ({ ...f, id: i + 1 }));
+      setDetectedFaces(mapped);
+      sendRoomEvent('faces-updated', { faces: mapped });
+      setAppStage('ready');
+    }
+  }, [sendRoomEvent]);
 
   // Crop face from full uncompressed feed with balanced magnification & clarity
   const cropFace = useCallback((face: DetectedFace): { faceUrl: string; overviewUrl: string | null } | null => {
@@ -509,6 +526,16 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
 
         {/* Right Action Icons Toolbar */}
         <div className="flex items-center gap-1 sm:gap-1.5">
+          {/* SNAPSHOT PHOTO SCAN BUTTON */}
+          <button
+            onClick={handleTriggerSnapshot}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 text-slate-950 text-xs font-cyber font-black transition-all shadow-[0_0_12px_rgba(34,197,94,0.5)] active:scale-95"
+            title="Chụp ảnh toàn lớp để nhận diện học sinh"
+          >
+            <Camera className="w-3.5 h-3.5 text-slate-950" />
+            <span className="inline">Chụp Lớp</span>
+          </button>
+
           {/* HORIZONTAL / LANDSCAPE ROTATE BUTTON (Xoay điện thoại chiều ngang) */}
           <button
             onClick={handleToggleLandscape}
@@ -660,23 +687,13 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
             className="block max-w-full max-h-full object-contain"
           />
 
-          {/* Precision Face Bounding Boxes Overlay (1:1 with Video Frame) */}
+          {/* Camera Shutter Flash on Snapshot */}
+          {isShutterFlashing && (
+            <div className="absolute inset-0 bg-white animate-shutter-flash z-50 pointer-events-none" />
+          )}
+
+          {/* Clean Face Bounding Boxes Overlay: Vivid green rounded rectangles matching reference image */}
           <div className="absolute inset-0 pointer-events-none">
-            {/* Ambient cyber scanlines */}
-            <div
-              className="absolute inset-0 opacity-10 pointer-events-none"
-              style={{
-                backgroundImage: 'repeating-linear-gradient(0deg, rgba(6,182,212,0.15) 0px, transparent 2px)',
-                backgroundSize: '100% 4px',
-              }}
-            />
-
-            {/* Scanning Laser Line */}
-            {appStage !== 'locked' && (
-              <div className="absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_15px_#06b6d4] animate-laser pointer-events-none opacity-75" />
-            )}
-
-            {/* Bounding box on each student's head */}
             {detectedFaces.map((face) => {
               const isTarget = face.id === highlightedFaceId;
               const isLocked = lockedFace && face.id === lockedFace.id;
@@ -684,7 +701,13 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
               return (
                 <div
                   key={face.id}
-                  className="absolute"
+                  className={`absolute rounded-xl sm:rounded-2xl transition-all ${
+                    isLocked
+                      ? 'border-[3.5px] border-amber-400 bg-amber-400/20 shadow-[0_0_25px_rgba(251,191,36,0.9)] scale-[1.03] z-30'
+                      : isTarget
+                      ? 'border-[3.5px] border-yellow-300 bg-yellow-400/20 shadow-[0_0_20px_rgba(250,204,21,0.85)] scale-[1.03] z-20'
+                      : 'border-[3px] border-[#22c55e] bg-emerald-500/5 shadow-[0_0_10px_rgba(34,197,94,0.35)]'
+                  }`}
                   style={{
                     left: `${face.x}%`,
                     top: `${face.y}%`,
@@ -692,57 +715,17 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
                     height: `${face.height}%`,
                   }}
                 >
+                  {/* Clean student badge */}
                   <div
-                    className={`relative w-full h-full rounded-lg transition-all ${
+                    className={`absolute -top-4 left-1 px-1.5 py-0.2 rounded-md text-[9px] font-sans font-bold whitespace-nowrap shadow-sm ${
                       isLocked
-                        ? 'border-3 border-amber-400 bg-amber-400/25 shadow-[0_0_25px_rgba(251,191,36,0.9)] scale-105 z-30'
+                        ? 'bg-amber-400 text-slate-950 font-black'
                         : isTarget
-                        ? 'border-2 border-yellow-300 bg-yellow-400/20 shadow-[0_0_20px_rgba(250,204,21,0.7)] scale-105 z-20'
-                        : 'border-2 border-cyan-400/80 bg-cyan-400/10'
+                        ? 'bg-yellow-300 text-slate-950 font-black'
+                        : 'bg-emerald-600/90 text-white'
                     }`}
                   >
-                    {/* Corner Brackets */}
-                    <div
-                      className={`absolute -top-1 -left-1 w-2.5 h-2.5 border-t-2 border-l-2 ${
-                        isLocked || isTarget ? 'border-amber-300' : 'border-cyan-400'
-                      }`}
-                    />
-                    <div
-                      className={`absolute -top-1 -right-1 w-2.5 h-2.5 border-t-2 border-r-2 ${
-                        isLocked || isTarget ? 'border-amber-300' : 'border-cyan-400'
-                      }`}
-                    />
-                    <div
-                      className={`absolute -bottom-1 -left-1 w-2.5 h-2.5 border-b-2 border-l-2 ${
-                        isLocked || isTarget ? 'border-amber-300' : 'border-cyan-400'
-                      }`}
-                    />
-                    <div
-                      className={`absolute -bottom-1 -right-1 w-2.5 h-2.5 border-b-2 border-r-2 ${
-                        isLocked || isTarget ? 'border-amber-300' : 'border-cyan-400'
-                      }`}
-                    />
-
-                    {/* Sequential Face Badge: MẶT #1, MẶT #2... */}
-                    <div
-                      className={`absolute -top-5 left-0 px-1.5 py-0.5 rounded text-[9px] font-cyber font-bold tracking-wider whitespace-nowrap shadow-md ${
-                        isLocked
-                          ? 'bg-amber-400 text-slate-950 font-black animate-bounce'
-                          : isTarget
-                          ? 'bg-yellow-300 text-slate-950 font-black'
-                          : 'bg-cyan-500 text-slate-950'
-                      }`}
-                    >
-                      {isLocked ? '★ ĐƯỢC CHỌN' : isTarget ? 'AIM...' : `MẶT #${face.id}`}
-                    </div>
-
-                    {/* Reticle */}
-                    {(isTarget || isLocked) && (
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="w-5 h-5 border border-amber-300/80 rounded-full animate-ping" />
-                        <div className="w-2 h-2 bg-amber-400 rounded-full shadow-[0_0_10px_#fbbf24]" />
-                      </div>
-                    )}
+                    {isLocked ? '★ ĐƯỢC CHỌN' : isTarget ? 'CHỌN' : `#${face.id}`}
                   </div>
                 </div>
               );

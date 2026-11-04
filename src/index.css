@@ -27,20 +27,19 @@
   }
 }
 
-@keyframes laserSweep {
+@keyframes cameraShutterFlash {
   0% {
-    top: 0%;
-    opacity: 0.8;
-  }
-  50% {
-    top: 96%;
-    opacity: 1;
+    opacity: 0.9;
   }
   100% {
-    top: 0%;
-    opacity: 0.8;
+    opacity: 0;
   }
 }
+
+.animate-shutter-flash {
+  animation: cameraShutterFlash 0.35s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+}
+
 
 @keyframes pulseGlow {
   0%, 100% {

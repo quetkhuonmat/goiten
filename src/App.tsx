@@ -130,6 +130,7 @@ export default function App() {
   const [callHistory, setCallHistory] = useState<CalledFaceRecord[]>([]);
   const [hasTorch, setHasTorch] = useState<boolean>(false);
   const [torchActive, setTorchActive] = useState<boolean>(false);
+  const [isShutterFlashing, setIsShutterFlashing] = useState<boolean>(false);
 
   // Modals
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -515,6 +516,9 @@ export default function App() {
       setLockedFace(null);
       setLockedFaceUrl(null);
       setHighlightedFaceId(null);
+      setIsShutterFlashing(true);
+      sound.playCameraShutter();
+      setTimeout(() => setIsShutterFlashing(false), 350);
     }
 
     let faces: DetectedFace[] = [];
@@ -928,6 +932,7 @@ export default function App() {
                     highlightedFaceId={highlightedFaceId}
                     lockedFace={lockedFace}
                     onTapToCreateFace={handleTapToCreateFace}
+                    isShutterFlashing={isShutterFlashing}
                   />
                 </div>
               ) : (
@@ -1048,6 +1053,7 @@ export default function App() {
                   highlightedFaceId={highlightedFaceId}
                   lockedFace={lockedFace}
                   onTapToCreateFace={handleTapToCreateFace}
+                  isShutterFlashing={isShutterFlashing}
                 />
               )}
             </div>
@@ -1056,6 +1062,15 @@ export default function App() {
           {/* Floating Action Buttons top left of video stage */}
           {mainViewMode === 'camera' && (
             <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => runFaceDetection(false)}
+                title="Chụp ảnh toàn thể lớp học để nhận diện khuôn mặt từng học sinh"
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 text-slate-950 font-black px-3.5 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-[0_0_15px_rgba(34,197,94,0.5)] active:scale-95"
+              >
+                <Camera className="w-3.5 h-3.5 text-slate-950" />
+                <span>Chụp ảnh lớp & Quét</span>
+              </button>
+
               <button
                 onClick={handleToggleCameraFacing}
                 title="Đổi Camera Trước / Sau"

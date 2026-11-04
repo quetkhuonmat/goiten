@@ -300,13 +300,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               <button
                 onClick={() => {
                   onDetectFaces();
-                  sound.playClick();
                 }}
                 disabled={isPicking || isDetecting}
-                className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
+                className="flex-1 py-2 px-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
               >
-                <RotateCcw className={`w-3 h-3 ${isDetecting ? 'animate-spin' : ''}`} />
-                <span>{isDetecting ? 'Đang quét...' : 'Quét lại khuôn mặt'}</span>
+                <Camera className={`w-3.5 h-3.5 text-slate-950 ${isDetecting ? 'animate-spin' : ''}`} />
+                <span>{isDetecting ? 'Đang chụp & nhận diện...' : '📸 Chụp ảnh lớp & Quét'}</span>
               </button>
 
               <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">

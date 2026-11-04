@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import { Camera } from 'lucide-react';
 import { DetectedFace, AppStage } from '../types';
 
 interface ScannerOverlayProps {
@@ -7,6 +8,7 @@ interface ScannerOverlayProps {
   highlightedFaceId: number | null;
   lockedFace: DetectedFace | null;
   onTapToCreateFace?: (x: number, y: number) => void;
+  isShutterFlashing?: boolean;
 }
 
 export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
@@ -15,18 +17,8 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
   highlightedFaceId,
   lockedFace,
   onTapToCreateFace,
+  isShutterFlashing = false,
 }) => {
-  const [flicker, setFlicker] = useState(false);
-
-  useEffect(() => {
-    if (appStage === 'picking') {
-      const interval = setInterval(() => {
-        setFlicker((prev) => !prev);
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, [appStage]);
-
   const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (appStage === 'picking' || appStage === 'locked') return;
     if (!onTapToCreateFace) return;
@@ -43,59 +35,30 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
         appStage === 'ready' || appStage === 'detecting' ? 'cursor-crosshair' : 'pointer-events-none'
       }`}
     >
-      {/* Sci-fi HUD Corner Brackets */}
-      <div className="absolute top-3 left-3 w-8 h-8 border-t-2 border-l-2 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)] pointer-events-none" />
-      <div className="absolute top-3 right-3 w-8 h-8 border-t-2 border-r-2 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)] pointer-events-none" />
-      <div className="absolute bottom-3 left-3 w-8 h-8 border-b-2 border-l-2 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)] pointer-events-none" />
-      <div className="absolute bottom-3 right-3 w-8 h-8 border-b-2 border-r-2 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)] pointer-events-none" />
+      {/* Real Camera Shutter Flash (when taking classroom snapshot) */}
+      {isShutterFlashing && (
+        <div className="absolute inset-0 bg-white animate-shutter-flash z-50 pointer-events-none" />
+      )}
 
-      {/* Cyber Grid background (subtle) */}
-      <div
-        className="absolute inset-0 opacity-10 pointer-events-none"
-        style={{
-          backgroundImage: `
-            linear-gradient(to right, rgba(6, 182, 212, 0.2) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(6, 182, 212, 0.2) 1px, transparent 1px)
-          `,
-          backgroundSize: '40px 40px',
-        }}
-      />
-
-      {/* Status HUD Header Overlay inside camera */}
-      <div className="absolute top-4 left-6 right-6 flex items-center justify-between text-[11px] font-cyber text-cyan-400/90 tracking-wider pointer-events-none">
-        <div className="flex items-center gap-2 bg-slate-950/85 px-3 py-1.5 rounded-full border border-cyan-500/40 backdrop-blur-md shadow-lg">
-          <span
-            className={`w-2 h-2 rounded-full inline-block ${
-              appStage === 'picking'
-                ? 'bg-amber-400 animate-ping'
-                : appStage === 'locked'
-                ? 'bg-emerald-400'
-                : 'bg-cyan-400'
-            }`}
-          />
-          <span className="font-bold">
+      {/* Clean Status Pill: Photo Snapshot & Face Recognition info */}
+      <div className="absolute top-3 left-4 right-4 flex items-center justify-between text-[11px] font-sans pointer-events-none z-20">
+        <div className="flex items-center gap-2 bg-slate-950/85 px-3 py-1.5 rounded-full border border-emerald-500/40 backdrop-blur-md shadow-lg text-emerald-300">
+          <Camera className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="font-semibold">
             {appStage === 'detecting'
-              ? 'ĐANG QUÉT TOÀN BỘ LỚP HỌC (GẦN ĐẾN XA)...'
+              ? 'Đang chụp ảnh & phân tích toàn bộ học sinh trong lớp...'
               : appStage === 'picking'
-              ? 'ĐANG QUAY CHỌN NGẪU NHIÊN...'
+              ? 'Đang chọn ngẫu nhiên học sinh...'
               : appStage === 'locked'
-              ? 'ĐÃ KHÓA HỌC SINH LÊN BẢNG'
+              ? 'Đã chọn học sinh!'
               : detectedFaces.length > 0
-              ? `ĐÃ NHẬN DIỆN ${detectedFaces.length} HỌC SINH`
-              : 'CHƯA PHÁT HIỆN HỌC SINH NÀO'}
+              ? `Đã nhận diện ${detectedFaces.length} học sinh trong lớp`
+              : 'Chụp ảnh lớp để nhận diện học sinh'}
           </span>
-        </div>
-        <div className="bg-slate-950/85 px-3 py-1.5 rounded-full border border-cyan-500/40 backdrop-blur-md shadow-lg text-[10px] text-cyan-300">
-          <span>AI CLASSROOM VISION</span>
         </div>
       </div>
 
-      {/* Continuous Laser Scanning Line across the classroom */}
-      {appStage !== 'locked' && (
-        <div className="absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_20px_#06b6d4] animate-laser pointer-events-none opacity-80" />
-      )}
-
-      {/* ALL DETECTED FACES: Mỗi khuôn mặt xuất hiện đúng một khung hình */}
+      {/* DETECTED FACES: Clean green rounded rectangle bounding boxes exactly matching reference image */}
       {detectedFaces.map((face) => {
         const isHighlighted = appStage === 'picking' && highlightedFaceId === face.id;
         const isLocked = appStage === 'locked' && lockedFace?.id === face.id;
@@ -103,14 +66,14 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
         return (
           <div
             key={face.id}
-            className={`absolute rounded-lg pointer-events-none transition-all duration-150 ${
+            className={`absolute pointer-events-none transition-all duration-150 rounded-xl sm:rounded-2xl ${
               isLocked
-                ? 'border-3 border-amber-400 bg-amber-400/30 shadow-[0_0_35px_rgba(251,191,36,0.95)] scale-105 z-30'
+                ? 'border-[3.5px] border-amber-400 bg-amber-400/20 shadow-[0_0_30px_rgba(251,191,36,0.9)] scale-[1.03] z-30'
                 : isHighlighted
-                ? 'border-3 border-yellow-300 bg-yellow-400/30 shadow-[0_0_25px_rgba(253,224,71,0.9)] scale-105 z-20'
+                ? 'border-[3.5px] border-yellow-300 bg-yellow-400/20 shadow-[0_0_20px_rgba(253,224,71,0.85)] scale-[1.03] z-20'
                 : face.called
-                ? 'border border-slate-600/50 bg-slate-900/30 opacity-40'
-                : 'border-2 border-cyan-400/90 bg-cyan-500/10 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+                ? 'border-2 border-emerald-700/60 bg-black/30 opacity-40'
+                : 'border-[3px] border-[#22c55e] bg-emerald-500/5 shadow-[0_0_10px_rgba(34,197,94,0.35)]'
             }`}
             style={{
               left: `${face.x}%`,
@@ -119,56 +82,26 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
               height: `${face.height}%`,
             }}
           >
-            {/* Precision Sci-Fi Corner Brackets */}
+            {/* Minimal clean index badge */}
             <div
-              className={`absolute -top-1 -left-1 w-2.5 h-2.5 border-t-2 border-l-2 ${
-                isLocked || isHighlighted ? 'border-amber-300' : 'border-cyan-300'
-              }`}
-            />
-            <div
-              className={`absolute -top-1 -right-1 w-2.5 h-2.5 border-t-2 border-r-2 ${
-                isLocked || isHighlighted ? 'border-amber-300' : 'border-cyan-300'
-              }`}
-            />
-            <div
-              className={`absolute -bottom-1 -left-1 w-2.5 h-2.5 border-b-2 border-l-2 ${
-                isLocked || isHighlighted ? 'border-amber-300' : 'border-cyan-300'
-              }`}
-            />
-            <div
-              className={`absolute -bottom-1 -right-1 w-2.5 h-2.5 border-b-2 border-r-2 ${
-                isLocked || isHighlighted ? 'border-amber-300' : 'border-cyan-300'
-              }`}
-            />
-
-            {/* Target tag with Face ID & Index */}
-            <div
-              className={`absolute -top-5 left-0 px-2 py-0.5 text-[9px] font-cyber font-bold whitespace-nowrap rounded shadow-md ${
+              className={`absolute -top-4 left-1 px-1.5 py-0.2 rounded-md text-[9px] font-sans font-bold whitespace-nowrap shadow-sm ${
                 isLocked
-                  ? 'bg-amber-400 text-slate-950 font-black animate-bounce'
+                  ? 'bg-amber-400 text-slate-950 scale-105'
                   : isHighlighted
-                  ? 'bg-yellow-300 text-slate-950 font-black'
+                  ? 'bg-yellow-300 text-slate-950 font-bold'
                   : face.called
                   ? 'bg-slate-800 text-slate-400'
-                  : 'bg-cyan-500 text-slate-950 font-bold'
+                  : 'bg-emerald-600/90 text-white'
               }`}
             >
               {isLocked
                 ? '★ ĐƯỢC CHỌN'
                 : isHighlighted
-                ? 'ĐANG CHỌN...'
+                ? 'CHỌN'
                 : face.called
-                ? `HỌC SINH #${face.id} (ĐÃ GỌI)`
-                : `HỌC SINH #${face.id}`}
+                ? `#${face.id} (đã gọi)`
+                : `#${face.id}`}
             </div>
-
-            {/* Crosshair reticle on active target */}
-            {(isHighlighted || isLocked) && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-5 h-5 border border-amber-300/80 rounded-full animate-ping" />
-                <div className="w-2 h-2 bg-amber-400 rounded-full shadow-[0_0_10px_#fbbf24]" />
-              </div>
-            )}
           </div>
         );
       })}
