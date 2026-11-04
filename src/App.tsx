@@ -26,9 +26,7 @@ import { sound } from './utils/audio';
 import {
   History,
   RefreshCw,
-  RotateCw,
   Camera,
-  Upload,
   Wifi,
   Users,
   Smartphone,
@@ -37,8 +35,6 @@ import {
   classifyCameraDevice,
   getSortedCameraDevices,
   CameraDeviceInfo,
-  lockOrientationLandscape,
-  unlockOrientation,
 } from './utils/cameraUtils';
 
 const DEV_APP_URL = 'https://ais-dev-3becnjuf7ng6rgghq67tzs-264511727123.asia-east1.run.app';
@@ -114,15 +110,8 @@ export default function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
     return localStorage.getItem('preferred_main_cam_id') || '';
   });
-  const [rotationAngle, setRotationAngle] = useState<number>(0);
-  const [isPhysicalLandscape, setIsPhysicalLandscape] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return window.innerWidth > window.innerHeight;
-    }
-    return false;
-  });
-  const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const consecutiveEmptyRef = useRef<number>(0);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
@@ -188,34 +177,6 @@ export default function App() {
     return [];
   }, []);
 
-  // Listen for orientation or window resize
-  useEffect(() => {
-    const handleResize = () => {
-      setIsPhysicalLandscape(window.innerWidth > window.innerHeight);
-    };
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
-  }, []);
-
-  // Toggle Landscape Orientation / Software Rotation
-  const handleToggleRotation = useCallback(async () => {
-    if (!isPhysicalLandscape && rotationAngle === 0) {
-      const locked = await lockOrientationLandscape(containerRef.current);
-      if (!locked) {
-        setRotationAngle(90);
-      }
-    } else if (rotationAngle === 90) {
-      setRotationAngle(0);
-      unlockOrientation();
-    } else {
-      setRotationAngle((prev) => (prev + 90) % 360);
-    }
-  }, [isPhysicalLandscape, rotationAngle]);
-
   // Hardware digital zoom controller
   const handleZoomChange = useCallback(
     async (newZoom: number) => {
@@ -277,59 +238,49 @@ export default function App() {
           if (savedId) deviceToUse = savedId;
         }
 
-        let stream: MediaStream;
+        let stream: MediaStream | null = null;
 
         if (deviceToUse) {
           try {
             stream = await navigator.mediaDevices.getUserMedia({
               video: {
                 deviceId: { exact: deviceToUse },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-              audio: false,
-            });
-          } catch {
-            // Fallback if specific deviceId failed
-            deviceToUse = undefined;
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                facingMode: { ideal: targetFacing },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-              audio: false,
-            });
-          }
-        } else if (targetFacing === 'environment') {
-          try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                facingMode: { ideal: 'environment' },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-              audio: false,
-            });
-          } catch {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                facingMode: 'environment',
                 width: { ideal: 1280 },
                 height: { ideal: 720 },
               },
               audio: false,
             });
+          } catch {
+            deviceToUse = undefined;
+            localStorage.removeItem('preferred_main_cam_id');
           }
-        } else {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: 'user' },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-            audio: false,
-          });
+        }
+
+        if (!stream) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: targetFacing },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+              audio: false,
+            });
+          } catch {
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                  facingMode: targetFacing,
+                },
+                audio: false,
+              });
+            } catch {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false,
+              });
+            }
+          }
         }
 
         mediaStreamRef.current = stream;
@@ -434,20 +385,17 @@ export default function App() {
       const nextIndex = (currentIndex + 1) % classifiedDevices.length;
       const nextDev = classifiedDevices[nextIndex];
       setSelectedDeviceId(nextDev.deviceId);
-      setCustomPhotoUrl(null);
       startCamera(nextDev.isFront ? 'user' : 'environment', nextDev.deviceId);
     } else {
       const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
       setCameraFacing(nextFacing);
       setSelectedDeviceId('');
-      setCustomPhotoUrl(null);
       startCamera(nextFacing);
     }
   };
 
   const handleSelectDeviceId = (devId: string) => {
     setSelectedDeviceId(devId);
-    setCustomPhotoUrl(null);
     const chosen = classifiedDevices.find((d) => d.deviceId === devId);
     startCamera(chosen?.isFront ? 'user' : 'environment', devId);
   };
@@ -486,9 +434,7 @@ export default function App() {
       try {
         let sourceEl: HTMLVideoElement | HTMLImageElement | null = null;
 
-        if (customPhotoUrl && imgRef.current && imgRef.current.naturalWidth) {
-          sourceEl = imgRef.current;
-        } else if (videoRef.current && videoRef.current.readyState >= 2) {
+        if (videoRef.current && videoRef.current.readyState >= 2) {
           sourceEl = videoRef.current;
         }
 
@@ -506,7 +452,7 @@ export default function App() {
         return null;
       }
     },
-    [customPhotoUrl]
+    []
   );
 
   // RUN FACE DETECTION ON CURRENT LIVE FEED OR CUSTOM PHOTO
@@ -523,9 +469,7 @@ export default function App() {
 
     let faces: DetectedFace[] = [];
 
-    if (customPhotoUrl && imgRef.current && imgRef.current.naturalWidth) {
-      faces = await detectClassroomFaces(imgRef.current);
-    } else if (videoRef.current && videoRef.current.readyState >= 2) {
+    if (videoRef.current && videoRef.current.readyState >= 2) {
       faces = await detectClassroomFaces(videoRef.current);
     }
 
@@ -537,8 +481,15 @@ export default function App() {
 
     setDetectedFaces((prev) => {
       if (finalized.length === 0) {
+        if (silent) {
+          consecutiveEmptyRef.current++;
+          if (consecutiveEmptyRef.current < 3 && prev.length > 0) {
+            return prev;
+          }
+        }
         return [];
       }
+      consecutiveEmptyRef.current = 0;
 
       return finalized.map((face, idx) => {
         const prevMatch = prev.find(
@@ -567,7 +518,7 @@ export default function App() {
         sound.playScanBeep(0.8);
       }
     }
-  }, [customPhotoUrl, callHistory]);
+  }, [callHistory]);
 
   // Continuous real-time automatic face detection (runs automatically every 600ms)
   useEffect(() => {
@@ -847,27 +798,6 @@ export default function App() {
     setHighlightedStudentId(null);
   };
 
-  // Upload single custom photo
-  const handleUploadCustomPhoto = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (typeof e.target?.result === 'string') {
-        setCustomPhotoUrl(e.target.result);
-        setMainViewMode('camera');
-        sound.playFanfare();
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Reset back to live camera
-  const handleResetToLiveCamera = () => {
-    setCustomPhotoUrl(null);
-    setMainViewMode('camera');
-    startCamera(cameraFacing, selectedDeviceId);
-    sound.playClick();
-  };
-
   // Fullscreen
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -983,41 +913,9 @@ export default function App() {
               </div>
             </div>
           ) : (
-            // 3. LOCAL CAMERA OR UPLOADED PHOTO STAGE
-            <div
-              className="relative flex items-center justify-center max-w-full max-h-full overflow-hidden transition-transform duration-300"
-              style={{
-                transform: `rotate(${rotationAngle}deg)`,
-                aspectRatio:
-                  rotationAngle === 90 || rotationAngle === 270
-                    ? mediaAspectRatio
-                      ? `${1 / mediaAspectRatio}`
-                      : undefined
-                    : mediaAspectRatio
-                    ? `${mediaAspectRatio}`
-                    : undefined,
-                width: rotationAngle === 90 || rotationAngle === 270 ? '100vh' : '100%',
-                height: rotationAngle === 90 || rotationAngle === 270 ? '100vw' : '100%',
-                maxWidth: '100%',
-                maxHeight: '100%',
-              }}
-            >
-              {customPhotoUrl ? (
-                <img
-                  ref={imgRef}
-                  src={customPhotoUrl}
-                  alt="Lớp học của bạn"
-                  referrerPolicy="no-referrer"
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    if (img.naturalWidth && img.naturalHeight) {
-                      setMediaAspectRatio(img.naturalWidth / img.naturalHeight);
-                    }
-                    runFaceDetection();
-                  }}
-                  className="w-full h-full object-contain block select-none"
-                />
-              ) : cameraActive ? (
+            // 3. LOCAL CAMERA STAGE
+            <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black">
+              {cameraActive ? (
                 <video
                   ref={videoRef}
                   playsInline
@@ -1030,7 +928,7 @@ export default function App() {
                     }
                     runFaceDetection();
                   }}
-                  className="w-full h-full object-contain block select-none"
+                  className="max-w-full max-h-full object-contain block select-none"
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center text-center p-6 max-w-sm">
@@ -1041,7 +939,7 @@ export default function App() {
                     MÁY TÍNH CHƯA CÓ CAMERA?
                   </h3>
                   <p className="text-xs text-slate-400 mb-4">
-                    Nếu thầy dùng máy tính bàn không webcam, hãy bấm <strong>"Dùng điện thoại làm camera"</strong> hoặc tải ảnh cả lớp!
+                    Nếu máy tính bàn không có webcam, hãy bấm <strong>"Dùng điện thoại làm camera"</strong> hoặc mở Album học sinh cả lớp!
                   </p>
                   <div className="flex flex-col gap-2 w-full">
                     <button
@@ -1056,14 +954,14 @@ export default function App() {
                       className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5"
                     >
                       <Users className="w-4 h-4" />
-                      <span>Tải ảnh học sinh cả lớp</span>
+                      <span>Album học sinh cả lớp</span>
                     </button>
                   </div>
                 </div>
               )}
 
               {/* HUD Cyber Scanner Overlay */}
-              {(cameraActive || customPhotoUrl) && (
+              {cameraActive && (
                 <ScannerOverlay
                   appStage={appStage}
                   detectedFaces={detectedFaces}
@@ -1073,33 +971,6 @@ export default function App() {
                   isShutterFlashing={isShutterFlashing}
                 />
               )}
-            </div>
-          )}
-
-          {/* Floating Action Buttons top left of video stage */}
-          {mainViewMode === 'camera' && (
-            <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2">
-              <button
-                onClick={handleToggleCameraFacing}
-                title="Đổi Camera Trước / Sau"
-                className="flex items-center gap-1.5 bg-slate-950/80 hover:bg-slate-900 border border-cyan-500/40 text-cyan-300 hover:text-white px-3 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-lg"
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Đổi Cam ({cameraFacing === 'environment' ? 'Sau' : 'Trước'})</span>
-              </button>
-
-              <button
-                onClick={handleToggleRotation}
-                title="Xoay điện thoại chiều ngang (Toàn cảnh lớp)"
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-cyber backdrop-blur-md transition-all shadow-lg border ${
-                  rotationAngle !== 0 || isPhysicalLandscape
-                    ? 'bg-amber-500/25 border-amber-400 text-amber-200'
-                    : 'bg-slate-950/80 hover:bg-slate-900 border-cyan-500/40 text-cyan-300'
-                }`}
-              >
-                <RotateCw className="w-3.5 h-3.5 text-amber-400" />
-                <span>{rotationAngle !== 0 ? `Xoay ${rotationAngle}°` : 'Xoay Ngang'}</span>
-              </button>
             </div>
           )}
 
@@ -1113,31 +984,12 @@ export default function App() {
               <span>Đã gọi ({callHistory.length})</span>
             </button>
           </div>
-
-          {/* Mode status badge bottom left */}
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-2 pointer-events-none">
-            <div className="flex items-center gap-1.5 bg-slate-950/80 border border-cyan-500/30 px-3 py-1.5 rounded-full text-[11px] font-cyber text-cyan-400 backdrop-blur-md">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>
-                {mainViewMode === 'album'
-                  ? `CHẾ ĐỘ ALBUM (${students.length} HỌC SINH)`
-                  : mainViewMode === 'remote-camera'
-                  ? `CAMERA ĐIỆN THOẠI (PHÒNG ${activeRoomId})`
-                  : customPhotoUrl
-                  ? 'ẢNH LỚP HỌC TẢI LÊN'
-                  : cameraFacing === 'environment'
-                  ? 'CAMERA SAU (LIVE)'
-                  : 'CAMERA TRƯỚC (LIVE)'}
-              </span>
-            </div>
-          </div>
         </div>
 
         {/* Right / Bottom: CONTROL PANEL */}
         <div className="w-full lg:w-96 shrink-0 h-auto lg:h-full max-h-[48vh] lg:max-h-full">
           <ControlPanel
             appStage={appStage}
-            onDetectFaces={runFaceDetection}
             onStartPick={handleStartPick}
             onStopPick={handleStopPick}
             detectedFaces={detectedFaces}
@@ -1151,9 +1003,6 @@ export default function App() {
             classifiedDevices={classifiedDevices}
             selectedDeviceId={selectedDeviceId}
             onSelectDeviceId={handleSelectDeviceId}
-            rotationAngle={rotationAngle}
-            onToggleRotation={handleToggleRotation}
-            isLandscape={isPhysicalLandscape}
             isMuted={isMuted}
             onToggleMute={() => {
               const nextMuted = !isMuted;
@@ -1164,23 +1013,11 @@ export default function App() {
             onToggleFullscreen={handleToggleFullscreen}
             callHistory={callHistory}
             onOpenHistory={() => setIsHistoryOpen(true)}
-            onOpenPhoneGuide={() => setIsPhoneGuideOpen(true)}
-            onUploadCustomPhoto={handleUploadCustomPhoto}
-            onResetToLiveCamera={handleResetToLiveCamera}
-            onLoadTestClassroomPhoto={() => {
-              setCustomPhotoUrl('/public/assets/aistudio/image_4dccfae1.png');
-              setMainViewMode('camera');
-              setAppStage('ready');
-            }}
-            hasCustomPhoto={Boolean(customPhotoUrl)}
             excludeCalled={excludeCalled}
             onToggleExcludeCalled={setExcludeCalled}
             hasTorch={hasTorch}
             torchActive={torchActive}
             onToggleTorch={handleToggleTorch}
-            // NEW PROPS
-            mainViewMode={mainViewMode}
-            onSetMainViewMode={setMainViewMode}
             onOpenRemoteConnect={() => setIsRemoteModalOpen(true)}
             isPhoneConnected={isPhoneConnected}
             studentsCount={students.length}

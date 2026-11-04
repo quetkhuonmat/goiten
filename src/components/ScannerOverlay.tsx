@@ -40,23 +40,15 @@ export const ScannerOverlay: React.FC<ScannerOverlayProps> = ({
         <div className="absolute inset-0 bg-white animate-shutter-flash z-50 pointer-events-none" />
       )}
 
-      {/* Clean Status Pill: Photo Snapshot & Face Recognition info */}
-      <div className="absolute top-3 left-4 right-4 flex items-center justify-between text-[11px] font-sans pointer-events-none z-20">
-        <div className="flex items-center gap-2 bg-slate-950/85 px-3 py-1.5 rounded-full border border-emerald-500/40 backdrop-blur-md shadow-lg text-emerald-300">
-          <Camera className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="font-semibold">
-            {appStage === 'detecting'
-              ? 'Đang chụp ảnh & phân tích toàn bộ học sinh trong lớp...'
-              : appStage === 'picking'
-              ? 'Đang chọn ngẫu nhiên học sinh...'
-              : appStage === 'locked'
-              ? 'Đã chọn học sinh!'
-              : detectedFaces.length > 0
-              ? `Đã nhận diện ${detectedFaces.length} học sinh trong lớp`
-              : 'Chụp ảnh lớp để nhận diện học sinh'}
-          </span>
+      {/* Status indicator during picking or locked */}
+      {(appStage === 'picking' || appStage === 'locked') && (
+        <div className="absolute top-4 left-4 z-20 pointer-events-none animate-fadeIn">
+          <div className="flex items-center gap-2 bg-slate-950/90 px-3.5 py-1.5 rounded-full border border-amber-400/60 backdrop-blur-md shadow-xl text-amber-300 text-xs font-bold font-cyber">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+            <span>{appStage === 'picking' ? 'ĐANG QUAY CHỌN...' : 'ĐÃ KHÓA HỌC SINH!'}</span>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* DETECTED FACES: Clean green rounded rectangle bounding boxes exactly matching reference image */}
       {detectedFaces.map((face) => {

@@ -2,28 +2,35 @@ import { DetectedFace } from '../types';
 import { unpackCascade, runCascade, clusterDetections, ClassifierFunction } from './pico';
 
 let faceClassifier: ClassifierFunction | null = null;
-let isLoadingCascade = false;
+let cascadeLoadingPromise: Promise<ClassifierFunction | null> | null = null;
 
-// Preload the local facefinder binary cascade
-async function initPicoClassifier(): Promise<ClassifierFunction | null> {
+// Preload the local facefinder binary cascade immediately
+export async function initPicoClassifier(): Promise<ClassifierFunction | null> {
   if (faceClassifier) return faceClassifier;
-  if (isLoadingCascade) return null;
+  if (cascadeLoadingPromise) return cascadeLoadingPromise;
 
-  try {
-    isLoadingCascade = true;
-    const response = await fetch('/facefinder');
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+  cascadeLoadingPromise = (async () => {
+    try {
+      const response = await fetch('/facefinder');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const buffer = await response.arrayBuffer();
+      faceClassifier = unpackCascade(new Int8Array(buffer));
+      return faceClassifier;
+    } catch (err) {
+      console.warn('Could not load /facefinder cascade:', err);
+      cascadeLoadingPromise = null;
+      return null;
     }
-    const buffer = await response.arrayBuffer();
-    faceClassifier = unpackCascade(new Int8Array(buffer));
-    return faceClassifier;
-  } catch (err) {
-    console.warn('Could not load /facefinder cascade:', err);
-    return null;
-  } finally {
-    isLoadingCascade = false;
-  }
+  })();
+
+  return cascadeLoadingPromise;
+}
+
+// Trigger eager preload
+if (typeof window !== 'undefined') {
+  initPicoClassifier().catch(() => {});
 }
 
 // Convert RGBA to Grayscale
@@ -41,8 +48,7 @@ function rgbaToGrayscale(rgba: Uint8ClampedArray, nrows: number, ncols: number):
 
 /**
  * Validates facial structure and rejects obvious false positives (walls, doors, empty uniforms).
- * Designed for diverse classroom conditions: fluorescent lighting, students with masks,
- * bangs/hair, glasses, and distant rows.
+ * Highly tolerant to classroom conditions: masks, bangs/hair, glasses, fluorescent lighting.
  */
 function verifyFacialStructure(
   rgba: Uint8ClampedArray,
@@ -61,14 +67,14 @@ function verifyFacialStructure(
 
   const boxW = endX - startX;
   const boxH = endY - startY;
-  if (boxW < 10 || boxH < 10) return false;
+  if (boxW < 8 || boxH < 8) return false;
 
   let faceFeaturePixels = 0;
   let totalSampled = 0;
   let sumLuminance = 0;
   let sumSqLuminance = 0;
 
-  const step = Math.max(1, Math.floor(size / 16));
+  const step = Math.max(1, Math.floor(size / 14));
 
   for (let y = startY; y < endY; y += step) {
     for (let x = startX; x < endX; x += step) {
@@ -82,14 +88,14 @@ function verifyFacialStructure(
       sumLuminance += lum;
       sumSqLuminance += lum * lum;
 
-      // 1. Check human skin tones (RGB and YCbCr with classroom light tolerance)
-      const isSkinRgb = r > 40 && g > 25 && b > 15 && r >= g * 0.8 && r >= b * 0.9;
+      // 1. Human skin tones (RGB & YCbCr)
+      const isSkinRgb = r > 35 && g > 20 && b > 10 && r >= g * 0.75 && r >= b * 0.8;
       const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
       const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-      const isSkinYCbCr = cb >= 68 && cb <= 142 && cr >= 122 && cr <= 186;
+      const isSkinYCbCr = cb >= 65 && cb <= 145 && cr >= 120 && cr <= 190;
 
-      // 2. Check facial features (eyes, eyebrows, dark hair, shadows under nose/lips)
-      const isFacialFeature = lum < 78;
+      // 2. Facial features (eyebrows, eyes, hair, shadow)
+      const isFacialFeature = lum < 85;
 
       if (isSkinRgb || isSkinYCbCr || isFacialFeature) {
         faceFeaturePixels++;
@@ -97,26 +103,25 @@ function verifyFacialStructure(
     }
   }
 
-  if (totalSampled < 8) return false;
+  if (totalSampled < 6) return false;
 
-  // Rejection 1: Flat uniform surfaces (blank walls, whiteboard, chalkboard, door panels)
+  // Rejection 1: Flat uniform surfaces (blank walls, whiteboard, door panels)
   const meanLum = sumLuminance / totalSampled;
   const variance = sumSqLuminance / totalSampled - meanLum * meanLum;
   const stdDev = Math.sqrt(Math.max(0, variance));
 
-  if (stdDev < 4.8) {
-    // Pure flat surface without facial texture
+  if (stdDev < 4.2) {
     return false;
   }
 
-  // Rejection 2: Pitch black void or pure blinding glare
-  if (meanLum < 12 || (meanLum > 246 && stdDev < 8)) {
+  // Rejection 2: Pitch black void or blinding light bulb
+  if (meanLum < 10 || (meanLum > 248 && stdDev < 6)) {
     return false;
   }
 
-  // Rejection 3: True faces must contain at least some skin or facial hair/eyes
+  // Rejection 3: Face region must have at least 7% skin or facial feature pixels
   const featureRatio = faceFeaturePixels / totalSampled;
-  if (featureRatio < 0.08) {
+  if (featureRatio < 0.07) {
     return false;
   }
 
@@ -124,7 +129,7 @@ function verifyFacialStructure(
 }
 
 /**
- * Natural head portrait box framing from hairline to chin and cheek to cheek.
+ * Natural head portrait box framing from hairline to chin.
  */
 function createAccurateHeadBox(
   cx: number,
@@ -156,7 +161,7 @@ function createAccurateHeadBox(
 }
 
 /**
- * Calculate Intersection over Union (IoU) between two face detections
+ * Calculate IoU between two detections
  */
 function computeIoU(
   a: [number, number, number, number],
@@ -191,13 +196,12 @@ function computeIoU(
 }
 
 /**
- * Suppress overlapping/duplicate bounding boxes (Non-Maximum Suppression)
+ * Suppress overlapping duplicate bounding boxes
  */
 function suppressDuplicateFaces(
   faces: Array<[number, number, number, number]>,
   iouThreshold = 0.35
 ): Array<[number, number, number, number]> {
-  // Sort descending by score
   const sorted = [...faces].sort((a, b) => b[3] - a[3]);
   const selected: Array<[number, number, number, number]> = [];
 
@@ -218,65 +222,26 @@ function suppressDuplicateFaces(
 }
 
 /**
- * Detect REAL classroom student faces across all rows (near to far distance).
- * Returns verified face bounding boxes precisely framing each student.
- * Guarantees ONE clean bounding box per student face without duplicate or nested boxes.
+ * Detect REAL classroom student faces across all rows on both phone & laptop.
  */
 export async function detectClassroomFaces(
   source: HTMLVideoElement | HTMLImageElement
 ): Promise<DetectedFace[]> {
+  if (!source) return [];
+
+  // Guard against unready video on mobile browsers
+  if ('readyState' in source && source.readyState < 2) {
+    return [];
+  }
+
   const width = 'videoWidth' in source ? source.videoWidth : source.naturalWidth;
   const height = 'videoHeight' in source ? source.videoHeight : source.naturalHeight;
 
-  if (!width || !height || width <= 30 || height <= 30) return [];
-
-  // 1. Check Native Hardware/Browser FaceDetector (Chrome Android / Chromium)
-  if ('FaceDetector' in window) {
-    try {
-      const FaceDetectorClass = (window as unknown as {
-        FaceDetector: new (opts?: { fastMode?: boolean; maxDetectedFaces?: number }) => {
-          detect: (s: CanvasImageSource) => Promise<Array<{ boundingBox: DOMRectReadOnly }>>;
-        };
-      }).FaceDetector;
-
-      const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 60 });
-      const faces = await detector.detect(source);
-
-      if (faces && faces.length > 0) {
-        // Sort systematic seating order: row by row (top to bottom), left to right
-        const sorted = [...faces].sort((a, b) => {
-          const rowA = Math.round(a.boundingBox.y / 50);
-          const rowB = Math.round(b.boundingBox.y / 50);
-          if (rowA !== rowB) return rowA - rowB;
-          return a.boundingBox.x - b.boundingBox.x;
-        });
-
-        return sorted.map((f, idx) => {
-          const bb = f.boundingBox;
-          const cx = bb.x + bb.width / 2;
-          const cy = bb.y + bb.height / 2;
-          const size = Math.max(bb.width, bb.height);
-          const box = createAccurateHeadBox(cx, cy, size, width, height);
-
-          return {
-            id: idx + 1,
-            ...box,
-            called: false,
-          };
-        });
-      }
-    } catch (err) {
-      console.warn('Native FaceDetector error, continuing with neural cascade:', err);
-    }
-  }
-
-  // 2. High-Speed Multi-Scale Pico Cascade
-  const classifier = await initPicoClassifier();
-  if (!classifier) return [];
+  if (!width || !height || width < 30 || height < 30) return [];
 
   const canvas = document.createElement('canvas');
-  // Optimal balance: 720px width for fast 50ms processing & high multi-row detection
-  const targetW = Math.min(width, 760);
+  // High-performance 640px processing width: fast ~30ms on mobile phones, preserves multi-row seating
+  const targetW = Math.min(width, 640);
   const targetH = Math.round((height / width) * targetW);
   canvas.width = targetW;
   canvas.height = targetH;
@@ -286,6 +251,55 @@ export async function detectClassroomFaces(
 
   try {
     ctx.drawImage(source, 0, 0, targetW, targetH);
+  } catch {
+    return [];
+  }
+
+  // 1. Hardware/Browser Native FaceDetector (Chrome Android / Chromium)
+  if ('FaceDetector' in window) {
+    try {
+      const FaceDetectorClass = (window as unknown as {
+        FaceDetector: new (opts?: { fastMode?: boolean; maxDetectedFaces?: number }) => {
+          detect: (s: CanvasImageSource) => Promise<Array<{ boundingBox: DOMRectReadOnly }>>;
+        };
+      }).FaceDetector;
+
+      const detector = new FaceDetectorClass({ fastMode: false, maxDetectedFaces: 60 });
+      // Use canvas to prevent DOMException with video on mobile Chrome
+      const nativeFaces = await detector.detect(canvas);
+
+      if (nativeFaces && nativeFaces.length > 0) {
+        const sorted = [...nativeFaces].sort((a, b) => {
+          const rowA = Math.round(a.boundingBox.y / 40);
+          const rowB = Math.round(b.boundingBox.y / 40);
+          if (rowA !== rowB) return rowA - rowB;
+          return a.boundingBox.x - b.boundingBox.x;
+        });
+
+        return sorted.map((f, idx) => {
+          const bb = f.boundingBox;
+          const cx = bb.x + bb.width / 2;
+          const cy = bb.y + bb.height / 2;
+          const size = Math.max(bb.width, bb.height);
+          const box = createAccurateHeadBox(cx, cy, size, targetW, targetH);
+
+          return {
+            id: idx + 1,
+            ...box,
+            called: false,
+          };
+        });
+      }
+    } catch {
+      // Fallback cleanly to Pico cascade
+    }
+  }
+
+  // 2. High-Speed Multi-Scale Pico Cascade
+  const classifier = await initPicoClassifier();
+  if (!classifier) return [];
+
+  try {
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
     const grayPixels = rgbaToGrayscale(imgData.data, targetH, targetW);
 
@@ -297,10 +311,10 @@ export async function detectClassroomFaces(
     };
 
     // Fine-scale parameters covering entire classroom seating depth:
-    // Smallest face: ~16px (far back row students)
-    // Largest face: ~72% of screen height (front row students)
-    const minFacePx = Math.max(16, Math.round(targetW * 0.021));
-    const maxFacePx = Math.round(targetH * 0.72);
+    // Smallest face: ~14px (far back row students)
+    // Largest face: ~75% of screen height (front row students)
+    const minFacePx = Math.max(14, Math.round(targetW * 0.02));
+    const maxFacePx = Math.round(targetH * 0.75);
 
     const params = {
       shiftfactor: 0.1,
@@ -320,12 +334,10 @@ export async function detectClassroomFaces(
       const size = det[2];
       const score = det[3];
 
-      // Realistic confidence threshold:
-      // Pico cluster scores for real faces are 2.2 to 8.0
-      const minConfidence = size < 35 ? 2.2 : 3.2;
+      // Balanced confidence threshold for real classrooms
+      const minConfidence = size < 35 ? 2.0 : 3.0;
       if (score < minConfidence) continue;
 
-      // Reject flat walls/cabinets
       const isValidFace = verifyFacialStructure(
         imgData.data,
         grayPixels,
@@ -335,21 +347,17 @@ export async function detectClassroomFaces(
         targetW,
         targetH
       );
-      if (!isValidFace) {
-        continue;
-      }
+      if (!isValidFace) continue;
 
       verifiedFaces.push(det);
     }
 
-    // Apply Non-Maximum Suppression to ensure exactly one box per student
     const finalFaces = suppressDuplicateFaces(verifiedFaces, 0.35);
 
-    // Sort systematically by classroom seating order:
-    // Top to bottom (far to near row), left to right
+    // Sort row by row (back to front), left to right
     finalFaces.sort((a, b) => {
-      const rowA = Math.round(a[0] / 45);
-      const rowB = Math.round(b[0] / 45);
+      const rowA = Math.round(a[0] / 40);
+      const rowB = Math.round(b[0] / 40);
       if (rowA !== rowB) return rowA - rowB;
       return a[1] - b[1];
     });
@@ -358,7 +366,6 @@ export async function detectClassroomFaces(
       const row = det[0];
       const col = det[1];
       const size = det[2];
-
       const box = createAccurateHeadBox(col, row, size, targetW, targetH);
 
       return {
@@ -368,7 +375,7 @@ export async function detectClassroomFaces(
       };
     });
   } catch (err) {
-    console.error('Cascade detection error:', err);
+    console.error('Detection error:', err);
     return [];
   }
 }
