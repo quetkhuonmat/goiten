@@ -104,7 +104,9 @@ export default function App() {
   const [zoom, setZoom] = useState<number>(1.0);
   const [isHardwareZoom, setIsHardwareZoom] = useState<boolean>(false);
   const [mediaAspectRatio, setMediaAspectRatio] = useState<number | null>(null);
-  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>(() => {
+    return isMobileDevice() ? 'environment' : 'user';
+  });
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [classifiedDevices, setClassifiedDevices] = useState<CameraDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
@@ -224,7 +226,7 @@ export default function App() {
       }
 
       const isMobile = isMobileDevice();
-      const targetFacing = facing || (isMobile ? 'environment' : 'environment');
+      const targetFacing = facing || (isMobile ? 'environment' : 'user');
       setCameraFacing(targetFacing);
 
       try {
@@ -258,6 +260,7 @@ export default function App() {
 
         if (!stream) {
           try {
+            // First attempt: with facingMode and 720p ideal
             stream = await navigator.mediaDevices.getUserMedia({
               video: {
                 facingMode: { ideal: targetFacing },
@@ -268,6 +271,7 @@ export default function App() {
             });
           } catch {
             try {
+              // Second attempt: simple facingMode
               stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                   facingMode: targetFacing,
@@ -275,6 +279,7 @@ export default function App() {
                 audio: false,
               });
             } catch {
+              // Universal fallback: any video camera available (crucial for laptops/Vercel)
               stream = await navigator.mediaDevices.getUserMedia({
                 video: true,
                 audio: false,
@@ -287,10 +292,18 @@ export default function App() {
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(() => {});
+            if (videoRef.current?.videoWidth && videoRef.current?.videoHeight) {
+              setMediaAspectRatio(videoRef.current.videoWidth / videoRef.current.videoHeight);
+            }
+            runFaceDetection();
+          };
           await videoRef.current.play().catch(() => {});
         }
 
         setCameraActive(true);
+        setCameraError(null);
 
         const sortedDevices = await updateDeviceList();
         const activeTrack = stream.getVideoTracks()[0];
@@ -313,8 +326,8 @@ export default function App() {
               0
             );
 
-          // AUTO-SWITCH TO REAR CAMERA IF BROWSER GAVE FRONT ON MOBILE
-          if (targetFacing === 'environment' && activeInfo.isFront && !specificDeviceId) {
+          // AUTO-SWITCH TO REAR CAMERA ONLY IF RUNNING ON A MOBILE DEVICE
+          if (isMobile && targetFacing === 'environment' && activeInfo.isFront && !specificDeviceId) {
             const firstRear = sortedDevices.find((d) => d.isRear);
             if (firstRear && firstRear.deviceId && firstRear.deviceId !== currentId) {
               console.log('Detected front camera opened on mobile, auto-switching to rear camera:', firstRear);
@@ -350,7 +363,7 @@ export default function App() {
 
         setTimeout(() => {
           runFaceDetection();
-        }, 500);
+        }, 300);
       } catch (err: unknown) {
         console.warn('Camera start fallback:', err);
         try {
@@ -361,15 +374,23 @@ export default function App() {
           mediaStreamRef.current = fallbackStream;
           if (videoRef.current) {
             videoRef.current.srcObject = fallbackStream;
+            videoRef.current.onloadedmetadata = () => {
+              videoRef.current?.play().catch(() => {});
+              runFaceDetection();
+            };
             await videoRef.current.play().catch(() => {});
           }
           setCameraActive(true);
+          setCameraError(null);
           updateDeviceList();
-          setTimeout(() => runFaceDetection(), 500);
-        } catch {
+          setTimeout(() => runFaceDetection(), 300);
+        } catch (finalErr: unknown) {
           setCameraActive(false);
+          const errMsg = finalErr instanceof Error ? finalErr.message : '';
           setCameraError(
-            'Chưa mở được camera máy tính. Thầy/Cô có thể dùng tính năng "Kết nối Camera Điện thoại" để dùng camera sau của điện thoại làm scanner!'
+            errMsg.includes('Permission') || errMsg.includes('NotAllowedError')
+              ? 'Trình duyệt chưa được cấp quyền Camera. Thầy/Cô hãy bấm "Bật Camera" bên dưới và chọn "Cho phép (Allow)".'
+              : 'Chưa thể kết nối camera máy tính. Thầy/Cô vui lòng bấm nút "Bật Camera" bên dưới để cấp quyền!'
           );
         }
       }
@@ -401,8 +422,10 @@ export default function App() {
   };
 
   useEffect(() => {
+    const isMobile = isMobileDevice();
+    const initialFacing = isMobile ? 'environment' : 'user';
     const savedId = localStorage.getItem('preferred_main_cam_id');
-    startCamera('environment', savedId || undefined);
+    startCamera(initialFacing, savedId || undefined);
 
     return () => {
       if (mediaStreamRef.current) {
@@ -520,7 +543,7 @@ export default function App() {
     }
   }, [callHistory]);
 
-  // Continuous real-time automatic face detection (runs automatically every 600ms)
+  // Continuous real-time automatic face detection (runs automatically every 200ms)
   useEffect(() => {
     if (!cameraActive || appStage !== 'ready' || mainViewMode !== 'camera') return;
     let isDetectingBusy = false;
@@ -532,7 +555,7 @@ export default function App() {
       } finally {
         isDetectingBusy = false;
       }
-    }, 600);
+    }, 200);
     return () => clearInterval(interval);
   }, [cameraActive, appStage, mainViewMode, runFaceDetection]);
 
@@ -933,27 +956,51 @@ export default function App() {
               ) : (
                 <div className="flex flex-col items-center justify-center text-center p-6 max-w-sm">
                   <div className="w-16 h-16 rounded-2xl bg-cyan-950/60 border border-cyan-500/40 flex items-center justify-center text-cyan-400 mb-4 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
-                    <Camera className="w-8 h-8" />
+                    <Camera className="w-8 h-8 animate-pulse" />
                   </div>
                   <h3 className="font-cyber font-bold text-white text-base mb-1">
-                    MÁY TÍNH CHƯA CÓ CAMERA?
+                    SẴN SÀNG QUÉT CAMERA
                   </h3>
                   <p className="text-xs text-slate-400 mb-4">
-                    Nếu máy tính bàn không có webcam, hãy bấm <strong>"Dùng điện thoại làm camera"</strong> hoặc mở Album học sinh cả lớp!
+                    Bấm <strong>"Bật Camera"</strong> và chọn <strong>"Cho phép (Allow)"</strong> khi trình duyệt hỏi để bắt đầu quét lớp học!
                   </p>
-                  <div className="flex flex-col gap-2 w-full">
+
+                  {cameraError && (
+                    <div className="w-full mb-4 p-2.5 bg-rose-950/70 border border-rose-500/40 text-rose-300 text-xs rounded-xl">
+                      {cameraError}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2.5 w-full">
+                    <button
+                      onClick={() => {
+                        sound.playClick();
+                        startCamera(isMobileDevice() ? 'environment' : 'user');
+                      }}
+                      className="py-3 px-4 bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-slate-950 font-cyber font-bold text-xs uppercase tracking-wider rounded-xl shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>BẬT CAMERA NGAY</span>
+                    </button>
+
+                    <div className="flex items-center gap-2 my-1">
+                      <div className="flex-1 h-px bg-slate-800" />
+                      <span className="text-[10px] text-slate-500 font-cyber uppercase">hoặc tùy chọn</span>
+                      <div className="flex-1 h-px bg-slate-800" />
+                    </div>
+
                     <button
                       onClick={() => setIsRemoteModalOpen(true)}
-                      className="py-2.5 px-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-cyber font-bold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                      className="py-2.5 px-3 bg-slate-800/80 hover:bg-slate-700/80 border border-emerald-500/30 text-emerald-300 font-cyber font-semibold text-xs rounded-xl shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      <Smartphone className="w-4 h-4" />
-                      <span>Dùng điện thoại làm camera</span>
+                      <Smartphone className="w-4 h-4 text-emerald-400" />
+                      <span>Dùng điện thoại làm camera (QR)</span>
                     </button>
                     <button
                       onClick={() => setIsClassAlbumOpen(true)}
-                      className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5"
+                      className="py-2.5 px-3 bg-slate-800/80 hover:bg-slate-700/80 border border-cyan-500/30 text-cyan-300 font-cyber font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      <Users className="w-4 h-4" />
+                      <Users className="w-4 h-4 text-cyan-400" />
                       <span>Album học sinh cả lớp</span>
                     </button>
                   </div>

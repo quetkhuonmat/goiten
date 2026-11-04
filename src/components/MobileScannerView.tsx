@@ -243,6 +243,12 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
       // Attach stream to video element
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(() => {});
+          if (videoRef.current?.videoWidth && videoRef.current?.videoHeight) {
+            setVideoAspectRatio(videoRef.current.videoWidth / videoRef.current.videoHeight);
+          }
+        };
         await videoRef.current.play().catch(() => {});
       }
 
@@ -332,7 +338,7 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
   useEffect(() => {
     if (!cameraActive) return;
 
-    // Continuous automatic face detection every 500ms
+    // Continuous automatic face detection every 200ms
     let isDetectingBusy = false;
     const faceInterval = setInterval(async () => {
       if (isDetectingBusy) return;
@@ -348,7 +354,7 @@ export const MobileScannerView: React.FC<MobileScannerViewProps> = ({
           isDetectingBusy = false;
         }
       }
-    }, 500);
+    }, 200);
 
     // Send video snapshot to desktop PC every 750ms
     const frameInterval = setInterval(() => {
