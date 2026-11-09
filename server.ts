@@ -638,11 +638,17 @@ async function startServer() {
     };
     qrAuthSessions.set(sessionId, session);
 
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+    const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    const origin = String(req.body.origin || `${proto}://${host}`).replace(/\/$/, '');
+    const scanUrl = `${origin}/api/auth/scan-${session.role}?s=${sessionId}`;
+
     res.json({
       success: true,
       sessionId,
       phone: norm,
       role: session.role,
+      scanUrl,
       createdAt: session.createdAt,
       expiresInSeconds: 600,
     });
@@ -721,6 +727,158 @@ async function startServer() {
       phone: session.phone,
       role: session.role,
     });
+  });
+
+  // Direct Scan for Admin from Phone / Zalo
+  app.get('/api/auth/scan-admin', (req: Request, res: Response) => {
+    const sessionId = String(req.query.s || '');
+    const session = qrAuthSessions.get(sessionId);
+    if (!session || session.role !== 'admin') {
+      res.status(404).send(`
+        <!DOCTYPE html>
+        <html lang="vi">
+        <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Hết hạn</title></head>
+        <body style="font-family:sans-serif;text-align:center;padding:40px;background:#090d16;color:#fff;">
+          <h2 style="color:#ef4444;">Mã QR đã hết hạn</h2>
+          <p style="color:#94a3b8;">Vui lòng mở lại màn hình máy tính để quét mã mới.</p>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
+    session.status = 'confirmed';
+    session.confirmedAt = Date.now();
+
+    // Broadcast SSE to computer screen
+    const listeners = qrSessionListeners.get(session.sessionId);
+    if (listeners && listeners.size > 0) {
+      const data = `data: ${JSON.stringify({
+        type: 'confirmed',
+        sessionId: session.sessionId,
+        phone: session.phone,
+        role: session.role,
+      })}\n\n`;
+      listeners.forEach((client) => {
+        try { client.write(data); } catch {}
+      });
+    }
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="vi">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Đăng nhập Admin Thành Công</title>
+        <style>
+          body {
+            margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #090d16; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 85vh; text-align: center;
+          }
+          .card {
+            background: #0f172a; border: 2px solid #10b981; border-radius: 24px; padding: 36px 20px; max-width: 380px; width: 100%; box-shadow: 0 0 50px rgba(16,185,129,0.3);
+          }
+          .icon {
+            width: 70px; height: 70px; background: rgba(16,185,129,0.18); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 36px; color: #10b981;
+          }
+          h2 { font-size: 20px; margin: 0 0 10px; color: #10b981; font-weight: 800; }
+          p { font-size: 14px; color: #cbd5e1; margin: 6px 0 16px; line-height: 1.5; }
+          .phone { font-family: monospace; font-size: 17px; font-weight: bold; color: #fbbf24; }
+          .btn {
+            display: inline-block; padding: 12px 24px; background: #0284c7; color: #fff; text-decoration: none; border-radius: 12px; font-size: 13px; font-weight: 600; margin-top: 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">✓</div>
+          <h2>XÁC THỰC ADMIN THÀNH CÔNG!</h2>
+          <p>Đã xác nhận quét mã QR Zalo Quản trị viên số <span class="phone">0973834541</span>.</p>
+          <p style="color:#94a3b8; font-size: 13px;">Màn hình máy tính đã được mở khóa Bảng Quản Trị ngay lập tức! Bạn có thể đóng trang này.</p>
+          <a class="btn" href="https://zalo.me/0973834541">Mở Zalo 0973834541</a>
+        </div>
+      </body>
+      </html>
+    `);
+  });
+
+  // Direct Scan for Teacher from Phone / Zalo
+  app.get('/api/auth/scan-teacher', (req: Request, res: Response) => {
+    const sessionId = String(req.query.s || '');
+    const session = qrAuthSessions.get(sessionId);
+    if (!session || session.role !== 'teacher') {
+      res.status(404).send(`
+        <!DOCTYPE html>
+        <html lang="vi">
+        <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Hết hạn</title></head>
+        <body style="font-family:sans-serif;text-align:center;padding:40px;background:#090d16;color:#fff;">
+          <h2 style="color:#ef4444;">Mã QR đã hết hạn</h2>
+          <p style="color:#94a3b8;">Vui lòng mở lại màn hình máy tính để quét mã mới.</p>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
+    session.status = 'confirmed';
+    session.confirmedAt = Date.now();
+
+    const licenses = loadLicenses();
+    const record = licenses.get(session.phone);
+    if (record) {
+      record.lastActiveAt = Date.now();
+      licenses.set(session.phone, record);
+      saveLicenses(licenses);
+    }
+
+    // Broadcast SSE to computer screen
+    const listeners = qrSessionListeners.get(session.sessionId);
+    if (listeners && listeners.size > 0) {
+      const data = `data: ${JSON.stringify({
+        type: 'confirmed',
+        sessionId: session.sessionId,
+        phone: session.phone,
+        role: session.role,
+      })}\n\n`;
+      listeners.forEach((client) => {
+        try { client.write(data); } catch {}
+      });
+    }
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="vi">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Đăng nhập Giáo Viên Thành Công</title>
+        <style>
+          body {
+            margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #090d16; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 85vh; text-align: center;
+          }
+          .card {
+            background: #0f172a; border: 2px solid #06b6d4; border-radius: 24px; padding: 36px 20px; max-width: 380px; width: 100%; box-shadow: 0 0 50px rgba(6,182,212,0.3);
+          }
+          .icon {
+            width: 70px; height: 70px; background: rgba(6,182,212,0.18); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 36px; color: #06b6d4;
+          }
+          h2 { font-size: 20px; margin: 0 0 10px; color: #06b6d4; font-weight: 800; }
+          p { font-size: 14px; color: #cbd5e1; margin: 6px 0 16px; line-height: 1.5; }
+          .phone { font-family: monospace; font-size: 17px; font-weight: bold; color: #38bdf8; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">✓</div>
+          <h2>XÁC THỰC GIÁO VIÊN THÀNH CÔNG!</h2>
+          <p>Tài khoản số <span class="phone">${session.phone}</span> đã được xác thực qua Zalo.</p>
+          <p style="color:#94a3b8; font-size: 13px;">Màn hình máy tính lớp học đã mở. Thầy/Cô có thể đóng trang này và bắt đầu giờ dạy!</p>
+        </div>
+      </body>
+      </html>
+    `);
   });
 
   // SSE Stream for Instant Real-Time Login
