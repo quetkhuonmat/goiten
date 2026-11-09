@@ -13,9 +13,13 @@ import {
   Smartphone,
   RefreshCw,
   Users,
+  KeyRound,
+  ShieldCheck,
+  Sparkles,
 } from 'lucide-react';
-import { AppStage, CalledFaceRecord, DetectedFace } from '../types';
+import { AppStage, CalledFaceRecord, DetectedFace, TeacherLicense } from '../types';
 import { CameraDeviceInfo } from '../utils/cameraUtils';
+import { FREE_TRIAL_SPINS } from '../utils/licenseManager';
 import { sound } from '../utils/audio';
 
 interface ControlPanelProps {
@@ -48,6 +52,10 @@ interface ControlPanelProps {
   isPhoneConnected: boolean;
   studentsCount: number;
   onOpenClassAlbum: () => void;
+  license: TeacherLicense | null;
+  onOpenLicenseModal: () => void;
+  onOpenAdminModal: () => void;
+  isAdminLoggedIn?: boolean;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -80,6 +88,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   isPhoneConnected,
   studentsCount,
   onOpenClassAlbum,
+  license,
+  onOpenLicenseModal,
+  onOpenAdminModal,
+  isAdminLoggedIn = false,
 }) => {
   const isPicking = appStage === 'picking';
   const hasFaces = detectedFaces.length > 0;
@@ -98,7 +110,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </h1>
           </div>
 
-          {/* Quick Header Tool Icons: Speaker, Flip Camera, Phone QR, Album, Fullscreen */}
+          {/* Quick Header Tool Icons: Speaker, Flip Camera, Phone QR, Album, Key, Admin, Fullscreen */}
           <div className="flex items-center gap-1">
             {/* Audio Toggle */}
             <button
@@ -160,6 +172,39 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               )}
             </button>
 
+            {/* License Key Trigger */}
+            <button
+              onClick={() => {
+                onOpenLicenseModal();
+                sound.playClick();
+              }}
+              title={license?.isKeyActive ? 'Bản quyền đã kích hoạt' : 'Nhập mã key bản quyền'}
+              className={`p-2 rounded-lg transition-colors ${
+                license?.isKeyActive
+                  ? 'bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300'
+                  : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS
+                  ? 'bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 animate-bounce'
+                  : 'bg-slate-800 hover:bg-slate-700 text-amber-300'
+              }`}
+            >
+              <KeyRound className="w-4 h-4" />
+            </button>
+
+            {/* Admin Portal Gateway - ONLY VISIBLE TO LOGGED IN ADMIN */}
+            {isAdminLoggedIn && (
+              <button
+                onClick={() => {
+                  onOpenAdminModal();
+                  sound.playClick();
+                }}
+                title="Quản trị viên (Cấp key & Quản lý bản quyền)"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 hover:text-amber-200 transition-all text-xs font-cyber font-bold shadow-sm cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span>Admin</span>
+              </button>
+            )}
+
             {/* Fullscreen Smartboard Toggle */}
             <button
               onClick={() => {
@@ -172,6 +217,56 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </button>
           </div>
+        </div>
+
+        {/* Teacher License / Trial Quota Status Banner */}
+        <div
+          onClick={() => {
+            sound.playClick();
+            onOpenLicenseModal();
+          }}
+          className={`mb-3 p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between shadow-md ${
+            license?.isKeyActive
+              ? 'bg-emerald-950/60 border-emerald-500/40 hover:border-emerald-400'
+              : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS
+              ? 'bg-rose-950/70 border-rose-500/50 hover:border-rose-400 animate-pulse'
+              : 'bg-slate-950/80 border-cyan-500/30 hover:border-cyan-400'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                license?.isKeyActive
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS
+                  ? 'bg-rose-500/20 text-rose-400'
+                  : 'bg-cyan-500/20 text-cyan-400'
+              }`}
+            >
+              {license?.isKeyActive ? <Sparkles className="w-4 h-4" /> : <KeyRound className="w-4 h-4" />}
+            </div>
+            <div>
+              <div className="text-[10px] text-slate-400 uppercase font-semibold font-cyber flex items-center gap-1.5">
+                <span>{license?.phone ? `SĐT: ${license.phone}` : 'Chưa đăng ký SĐT'}</span>
+                {license?.isKeyActive && (
+                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded font-bold">
+                    PRO
+                  </span>
+                )}
+              </div>
+              <div className="text-xs font-cyber font-bold text-white">
+                {license?.isKeyActive
+                  ? (license.keyType === 'unlimited' ? 'Bản quyền Vĩnh viễn' : `Còn ${(license.grantedSpins || 500) - (license.usedSpins || 0)} lượt quay`)
+                  : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS
+                  ? 'Hết lượt quay (Bấm để kích hoạt)'
+                  : 'Tài khoản Giáo viên (Đang hoạt động)'}
+              </div>
+            </div>
+          </div>
+
+          <span className="text-[11px] font-cyber font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-500/30 px-2.5 py-1 rounded-lg">
+            {license?.isKeyActive ? 'Bản quyền' : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS ? 'Nhập Key' : 'Bản quyền'}
+          </span>
         </div>
 
         {/* Real-Time Automatic Face Detection Status */}

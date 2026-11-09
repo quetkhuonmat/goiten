@@ -13,13 +13,29 @@ import { ClassAlbumModal } from './components/ClassAlbumModal';
 import { ClassAlbumStage } from './components/ClassAlbumStage';
 import { RemoteCameraModal } from './components/RemoteCameraModal';
 import { MobileScannerView } from './components/MobileScannerView';
+import { PhoneRegisterModal } from './components/PhoneRegisterModal';
+import { QuotaExceededModal } from './components/QuotaExceededModal';
+import { LicenseKeyModal } from './components/LicenseKeyModal';
+import { AdminLicenseModal } from './components/AdminLicenseModal';
+import { AdminQrScanModal } from './components/AdminQrScanModal';
 import {
   DetectedFace,
   AppStage,
   CalledFaceRecord,
   StudentPhotoItem,
   MainViewMode,
+  TeacherLicense,
 } from './types';
+import {
+  getStoredLicense,
+  apiRegisterPhone,
+  apiRecordSpin,
+  apiActivateLicenseKey,
+  checkCanSpin,
+  FREE_TRIAL_SPINS,
+  isStoredAdminAuth,
+  setStoredAdminAuth,
+} from './utils/licenseManager';
 import { detectClassroomFaces } from './utils/faceDetector';
 import { cropStudentFacePortrait } from './utils/faceCropUtils';
 import { sound } from './utils/audio';
@@ -129,6 +145,54 @@ export default function App() {
   const [isPhoneGuideOpen, setIsPhoneGuideOpen] = useState<boolean>(false);
   const [isClassAlbumOpen, setIsClassAlbumOpen] = useState<boolean>(false);
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
+
+  // Teacher License & 20 Free Trial Quota Management
+  const [license, setLicense] = useState<TeacherLicense | null>(() => getStoredLicense());
+  const [isPhoneRegisterOpen, setIsPhoneRegisterOpen] = useState<boolean>(() => {
+    const saved = getStoredLicense();
+    return !saved || !saved.phone;
+  });
+  const [isQuotaExceededOpen, setIsQuotaExceededOpen] = useState<boolean>(false);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => isStoredAdminAuth());
+  const [isAdminQrModalOpen, setIsAdminQrModalOpen] = useState<boolean>(false);
+
+  const handleRegisterPhone = async (phone: string) => {
+    const updated = await apiRegisterPhone(phone);
+    setLicense(updated);
+    setIsPhoneRegisterOpen(false);
+  };
+
+  const handleActivateKey = async (phone: string, key: string) => {
+    const res = await apiActivateLicenseKey(phone, key);
+    if (res.success && res.license) {
+      setLicense({ ...res.license });
+    }
+    return res;
+  };
+
+  const handleChangePhone = async (newPhone: string) => {
+    const updated = await apiRegisterPhone(newPhone);
+    setLicense(updated);
+  };
+
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('teacher_license_data_v1');
+      localStorage.removeItem('admin_session_auth_v1');
+    } catch (e) {
+      console.warn('Cannot clear license from localStorage:', e);
+    }
+    setLicense(null);
+    setIsAdminLoggedIn(false);
+    setStoredAdminAuth(false);
+    setIsLicenseModalOpen(false);
+    setIsAdminModalOpen(false);
+    setIsAdminQrModalOpen(false);
+    setIsPhoneRegisterOpen(true);
+    sound.playClick();
+  };
 
   // References
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -653,6 +717,25 @@ export default function App() {
   const handleStartPick = () => {
     if (appStage === 'picking') return;
 
+    // 1. Check teacher phone registration
+    if (!license || !license.phone) {
+      setIsPhoneRegisterOpen(true);
+      return;
+    }
+
+    // 2. Check 20 free trial spins or active license key quota
+    const quota = checkCanSpin(license);
+    if (!quota.canSpin) {
+      sound.playClick();
+      setIsQuotaExceededOpen(true);
+      return;
+    }
+
+    // 3. Record spin call on backend and local cumulative counter
+    apiRecordSpin(license.phone).then((updated) => {
+      setLicense({ ...updated });
+    });
+
     // A) PICK FROM CLASS ALBUM ROSTER
     if (mainViewMode === 'album') {
       if (students.length === 0) {
@@ -1069,6 +1152,10 @@ export default function App() {
             isPhoneConnected={isPhoneConnected}
             studentsCount={students.length}
             onOpenClassAlbum={() => setIsClassAlbumOpen(true)}
+            license={license}
+            onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
+            onOpenAdminModal={() => setIsAdminModalOpen(true)}
+            isAdminLoggedIn={isAdminLoggedIn}
           />
         </div>
       </div>
@@ -1126,6 +1213,67 @@ export default function App() {
           handleStartPick();
         }}
         onAddScore={handleAddScore}
+      />
+
+      {/* Teacher Phone Registration Modal (First-time 20 Free Trial Spins) */}
+      <PhoneRegisterModal
+        isOpen={isPhoneRegisterOpen}
+        onRegister={handleRegisterPhone}
+        onOpenKeyModal={() => {
+          setIsPhoneRegisterOpen(false);
+          setIsLicenseModalOpen(true);
+        }}
+        onOpenAdminQr={() => {
+          setIsPhoneRegisterOpen(false);
+          setIsAdminQrModalOpen(true);
+        }}
+      />
+
+      {/* Quota Exceeded Modal (20 free spins exhausted -> Contact Zalo 0973834541) */}
+      <QuotaExceededModal
+        isOpen={isQuotaExceededOpen}
+        onClose={() => setIsQuotaExceededOpen(false)}
+        currentPhone={license?.phone || ''}
+        usedSpins={license?.usedSpins || FREE_TRIAL_SPINS}
+        onActivateKey={handleActivateKey}
+      />
+
+      {/* License Key & Quota Status Modal */}
+      <LicenseKeyModal
+        isOpen={isLicenseModalOpen}
+        onClose={() => setIsLicenseModalOpen(false)}
+        license={license}
+        onActivateKey={handleActivateKey}
+        onChangePhone={handleChangePhone}
+        onOpenAdmin={() => setIsAdminModalOpen(true)}
+        onLogout={handleLogout}
+        isAdminLoggedIn={isAdminLoggedIn}
+      />
+
+      {/* Admin Panel (Manage Phone Numbers, Spins, and Issue Keys) */}
+      <AdminLicenseModal
+        isOpen={isAdminModalOpen}
+        onClose={() => {
+          setIsAdminModalOpen(false);
+          setLicense(getStoredLicense());
+        }}
+        onOpenAdminQr={() => setIsAdminQrModalOpen(true)}
+        onAdminLogout={() => {
+          setIsAdminLoggedIn(false);
+          setStoredAdminAuth(false);
+        }}
+      />
+
+      {/* Admin Zalo QR Code Scanner Modal (0973834541) */}
+      <AdminQrScanModal
+        isOpen={isAdminQrModalOpen}
+        onClose={() => setIsAdminQrModalOpen(false)}
+        onSuccess={() => {
+          setIsAdminQrModalOpen(false);
+          setIsAdminLoggedIn(true);
+          setIsPhoneRegisterOpen(false);
+          setIsAdminModalOpen(true);
+        }}
       />
     </div>
   );

@@ -40,3 +40,17 @@ export interface RemoteRoomState {
   latestFrame: string | null;
   score: number;
 }
+
+export type LicenseKeyType = 'unlimited' | '500' | '200' | '100';
+
+export interface TeacherLicense {
+  phone: string;
+  registeredAt: number;
+  usedSpins: number;
+  isKeyActive: boolean;
+  keyType?: LicenseKeyType;
+  grantedSpins?: number;
+  activeKey?: string;
+  activatedAt?: number;
+  lastActiveAt?: number;
+}

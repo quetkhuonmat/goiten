@@ -1,6 +1,74 @@
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
+
+interface TeacherLicenseRecord {
+  phone: string;
+  registeredAt: number;
+  usedSpins: number;
+  isKeyActive: boolean;
+  keyType?: 'unlimited' | '500' | '200' | '100';
+  grantedSpins?: number;
+  activeKey?: string;
+  activatedAt?: number;
+  lastActiveAt?: number;
+}
+
+const DATA_DIR = path.resolve('data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const LICENSES_FILE = path.join(DATA_DIR, 'licenses.json');
+
+const loadLicenses = (): Map<string, TeacherLicenseRecord> => {
+  try {
+    if (fs.existsSync(LICENSES_FILE)) {
+      const raw = fs.readFileSync(LICENSES_FILE, 'utf-8');
+      const list: TeacherLicenseRecord[] = JSON.parse(raw);
+      const map = new Map<string, TeacherLicenseRecord>();
+      for (const item of list) {
+        if (item.phone) map.set(item.phone, item);
+      }
+      return map;
+    }
+  } catch (e) {
+    console.warn('Error reading licenses file:', e);
+  }
+  return new Map();
+};
+
+const saveLicenses = (map: Map<string, TeacherLicenseRecord>) => {
+  try {
+    const list = Array.from(map.values());
+    fs.writeFileSync(LICENSES_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Error writing licenses file:', e);
+  }
+};
+
+const SECRET_SALT = 'AIS_KEY_SALT_2026_HAITV_ZALO_0973834541';
+const ADMIN_PINS = new Set(['0973834541', 'admin123']);
+
+function computeChecksum(str: string): string {
+  let hash1 = 5381;
+  let hash2 = 52711;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash1 = (hash1 * 33) ^ char;
+    hash2 = (hash2 * 33) ^ char;
+  }
+  const combined = (Math.abs(hash1) * 31 + Math.abs(hash2)).toString(16).toUpperCase();
+  return combined.padStart(6, '0').slice(-6);
+}
+
+function generateLicenseKeyServer(phone: string, type: string): string {
+  let norm = phone.replace(/\D/g, '');
+  if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+  const typeCode = type === 'unlimited' ? 'UNL' : type;
+  const checksum = computeChecksum(`${norm}:${typeCode}:${SECRET_SALT}`);
+  return `AI-${norm}-${typeCode}-${checksum}`;
+}
 
 interface RoomEvent {
   id: string;
@@ -148,6 +216,203 @@ async function startServer() {
 
     broadcastToRoom(roomId, event);
     res.json({ success: true, room });
+  });
+
+  // ==================== TEACHER LICENSE & KEY MANAGEMENT APIS ====================
+
+  // Register or sync teacher phone
+  app.post('/api/license/register', (req: Request, res: Response) => {
+    let { phone } = req.body;
+    if (!phone) {
+      res.status(400).json({ error: 'Missing phone number' });
+      return;
+    }
+    phone = phone.replace(/\D/g, '');
+    if (phone.startsWith('84') && phone.length === 11) phone = '0' + phone.substring(2);
+
+    const licenses = loadLicenses();
+    let record = licenses.get(phone);
+    if (!record) {
+      record = {
+        phone,
+        registeredAt: Date.now(),
+        usedSpins: 0,
+        isKeyActive: false,
+        lastActiveAt: Date.now(),
+      };
+      licenses.set(phone, record);
+      saveLicenses(licenses);
+    } else {
+      record.lastActiveAt = Date.now();
+      saveLicenses(licenses);
+    }
+    res.json(record);
+  });
+
+  // Record a spin call
+  app.post('/api/license/spin', (req: Request, res: Response) => {
+    let { phone, clientUsedSpins } = req.body;
+    if (!phone) {
+      res.status(400).json({ error: 'Missing phone number' });
+      return;
+    }
+    phone = phone.replace(/\D/g, '');
+    if (phone.startsWith('84') && phone.length === 11) phone = '0' + phone.substring(2);
+
+    const licenses = loadLicenses();
+    let record = licenses.get(phone);
+    if (!record) {
+      record = {
+        phone,
+        registeredAt: Date.now(),
+        usedSpins: 1,
+        isKeyActive: false,
+        lastActiveAt: Date.now(),
+      };
+    } else {
+      const targetSpins = typeof clientUsedSpins === 'number'
+        ? Math.max(record.usedSpins + 1, clientUsedSpins)
+        : record.usedSpins + 1;
+      record.usedSpins = targetSpins;
+      record.lastActiveAt = Date.now();
+    }
+    licenses.set(phone, record);
+    saveLicenses(licenses);
+    res.json(record);
+  });
+
+  // Activate license key
+  app.post('/api/license/activate', (req: Request, res: Response) => {
+    let { phone, key, keyType, grantedSpins } = req.body;
+    if (!phone || !key) {
+      res.status(400).json({ error: 'Missing phone or key' });
+      return;
+    }
+    phone = phone.replace(/\D/g, '');
+    if (phone.startsWith('84') && phone.length === 11) phone = '0' + phone.substring(2);
+
+    const licenses = loadLicenses();
+    let record = licenses.get(phone);
+    if (!record) {
+      record = {
+        phone,
+        registeredAt: Date.now(),
+        usedSpins: 0,
+        isKeyActive: true,
+        keyType: keyType || 'unlimited',
+        grantedSpins: grantedSpins || undefined,
+        activeKey: key,
+        activatedAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+    } else {
+      record.isKeyActive = true;
+      record.keyType = keyType || 'unlimited';
+      record.grantedSpins = grantedSpins || undefined;
+      record.activeKey = key;
+      record.activatedAt = Date.now();
+      record.lastActiveAt = Date.now();
+    }
+    licenses.set(phone, record);
+    saveLicenses(licenses);
+    res.json({ success: true, record });
+  });
+
+  // Query license status by phone
+  app.get('/api/license/status', (req: Request, res: Response) => {
+    let phone = String(req.query.phone || '');
+    phone = phone.replace(/\D/g, '');
+    if (phone.startsWith('84') && phone.length === 11) phone = '0' + phone.substring(2);
+
+    if (!phone) {
+      res.status(400).json({ error: 'Missing phone query parameter' });
+      return;
+    }
+
+    const licenses = loadLicenses();
+    const record = licenses.get(phone) || null;
+    res.json({ record });
+  });
+
+  // Admin: Get all teachers list with spin counts
+  app.post('/api/license/admin/list', (req: Request, res: Response) => {
+    const { pin } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    const licenses = loadLicenses();
+    const list = Array.from(licenses.values()).sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
+    res.json({ success: true, teachers: list, totalCount: list.length });
+  });
+
+  // Admin: Issue / Generate Key for a teacher
+  app.post('/api/license/admin/generate-key', (req: Request, res: Response) => {
+    const { pin, phone, type = 'unlimited' } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    if (!norm || norm.length !== 10) {
+      res.status(400).json({ error: 'Số điện thoại không hợp lệ (cần 10 chữ số)' });
+      return;
+    }
+
+    const key = generateLicenseKeyServer(norm, type);
+    const licenses = loadLicenses();
+    let record = licenses.get(norm);
+    if (!record) {
+      record = {
+        phone: norm,
+        registeredAt: Date.now(),
+        usedSpins: 0,
+        isKeyActive: true,
+        keyType: type as any,
+        grantedSpins: type === 'unlimited' ? undefined : Number(type),
+        activeKey: key,
+        activatedAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+    } else {
+      record.isKeyActive = true;
+      record.keyType = type as any;
+      record.grantedSpins = type === 'unlimited' ? undefined : Number(type),
+      record.activeKey = key;
+      record.activatedAt = Date.now();
+      record.lastActiveAt = Date.now();
+    }
+    licenses.set(norm, record);
+    saveLicenses(licenses);
+
+    res.json({
+      success: true,
+      key,
+      teacher: record,
+    });
+  });
+
+  // Admin: Reset used spins for a teacher
+  app.post('/api/license/admin/reset', (req: Request, res: Response) => {
+    const { pin, phone } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    const licenses = loadLicenses();
+    const record = licenses.get(norm);
+    if (record) {
+      record.usedSpins = 0;
+      record.lastActiveAt = Date.now();
+      licenses.set(norm, record);
+      saveLicenses(licenses);
+    }
+    res.json({ success: true, teacher: record });
   });
 
   // Clean stale rooms older than 6 hours
