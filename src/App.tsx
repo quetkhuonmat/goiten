@@ -18,6 +18,7 @@ import { QuotaExceededModal } from './components/QuotaExceededModal';
 import { LicenseKeyModal } from './components/LicenseKeyModal';
 import { AdminLicenseModal } from './components/AdminLicenseModal';
 import { AdminQrScanModal } from './components/AdminQrScanModal';
+import { QrZaloConfirmView } from './components/QrZaloConfirmView';
 import {
   DetectedFace,
   AppStage,
@@ -35,6 +36,7 @@ import {
   FREE_TRIAL_SPINS,
   isStoredAdminAuth,
   setStoredAdminAuth,
+  RegisterPhoneResult,
 } from './utils/licenseManager';
 import { detectClassroomFaces } from './utils/faceDetector';
 import { cropStudentFacePortrait } from './utils/faceCropUtils';
@@ -79,6 +81,23 @@ export default function App() {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
     return params.get('mode') === 'phone-cam' && Boolean(params.get('room'));
+  });
+
+  // Check if opened via Zalo QR scan to confirm login
+  const [qrConfirmParams] = useState<{
+    sessionId: string;
+    phone: string;
+    role: 'teacher' | 'admin';
+  } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('qr_confirm');
+    if (!sessionId) return null;
+    return {
+      sessionId,
+      phone: params.get('phone') || '',
+      role: (params.get('role') || 'teacher') as 'teacher' | 'admin',
+    };
   });
 
   const [activeRoomId] = useState<string>(() => {
@@ -146,11 +165,11 @@ export default function App() {
   const [isClassAlbumOpen, setIsClassAlbumOpen] = useState<boolean>(false);
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
 
-  // Teacher License & 20 Free Trial Quota Management
+  // Teacher License & Quota Management
   const [license, setLicense] = useState<TeacherLicense | null>(() => getStoredLicense());
   const [isPhoneRegisterOpen, setIsPhoneRegisterOpen] = useState<boolean>(() => {
     const saved = getStoredLicense();
-    return !saved || !saved.phone;
+    return !saved || !saved.phone || saved.status !== 'approved';
   });
   const [isQuotaExceededOpen, setIsQuotaExceededOpen] = useState<boolean>(false);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
@@ -158,9 +177,16 @@ export default function App() {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => isStoredAdminAuth());
   const [isAdminQrModalOpen, setIsAdminQrModalOpen] = useState<boolean>(false);
 
-  const handleRegisterPhone = async (phone: string) => {
-    const updated = await apiRegisterPhone(phone);
-    setLicense(updated);
+  const handleRegisterPhone = async (phone: string): Promise<RegisterPhoneResult> => {
+    const res = await apiRegisterPhone(phone);
+    if (res.license) {
+      setLicense(res.license);
+    }
+    return res;
+  };
+
+  const handleTeacherApproved = (approvedLicense: TeacherLicense) => {
+    setLicense(approvedLicense);
     setIsPhoneRegisterOpen(false);
   };
 
@@ -173,8 +199,14 @@ export default function App() {
   };
 
   const handleChangePhone = async (newPhone: string) => {
-    const updated = await apiRegisterPhone(newPhone);
-    setLicense(updated);
+    const res = await apiRegisterPhone(newPhone);
+    if (res.license) {
+      setLicense(res.license);
+      if (res.license.status !== 'approved') {
+        setIsLicenseModalOpen(false);
+        setIsPhoneRegisterOpen(true);
+      }
+    }
   };
 
   const handleLogout = () => {
@@ -222,6 +254,17 @@ export default function App() {
             window.history.replaceState({}, '', window.location.pathname);
           }
         }}
+      />
+    );
+  }
+
+  // If opened via Zalo QR scan on mobile to confirm login
+  if (qrConfirmParams) {
+    return (
+      <QrZaloConfirmView
+        sessionId={qrConfirmParams.sessionId}
+        phone={qrConfirmParams.phone}
+        role={qrConfirmParams.role}
       />
     );
   }
@@ -717,8 +760,8 @@ export default function App() {
   const handleStartPick = () => {
     if (appStage === 'picking') return;
 
-    // 1. Check teacher phone registration
-    if (!license || !license.phone) {
+    // 1. Check teacher phone registration & admin approval
+    if (!license || !license.phone || license.status !== 'approved') {
       setIsPhoneRegisterOpen(true);
       return;
     }
@@ -1215,14 +1258,11 @@ export default function App() {
         onAddScore={handleAddScore}
       />
 
-      {/* Teacher Phone Registration Modal (First-time 20 Free Trial Spins) */}
+      {/* Teacher Phone Registration Modal (Whitelist or Approval Required) */}
       <PhoneRegisterModal
         isOpen={isPhoneRegisterOpen}
         onRegister={handleRegisterPhone}
-        onOpenKeyModal={() => {
-          setIsPhoneRegisterOpen(false);
-          setIsLicenseModalOpen(true);
-        }}
+        onApproved={handleTeacherApproved}
         onOpenAdminQr={() => {
           setIsPhoneRegisterOpen(false);
           setIsAdminQrModalOpen(true);

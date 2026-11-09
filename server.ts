@@ -5,14 +5,17 @@ import fs from 'fs';
 
 interface TeacherLicenseRecord {
   phone: string;
+  name?: string;
   registeredAt: number;
   usedSpins: number;
   isKeyActive: boolean;
+  status: 'approved' | 'pending' | 'rejected';
   keyType?: 'unlimited' | '500' | '200' | '100';
   grantedSpins?: number;
   activeKey?: string;
   activatedAt?: number;
   lastActiveAt?: number;
+  approvedAt?: number;
 }
 
 const DATA_DIR = path.resolve('data');
@@ -28,7 +31,13 @@ const loadLicenses = (): Map<string, TeacherLicenseRecord> => {
       const list: TeacherLicenseRecord[] = JSON.parse(raw);
       const map = new Map<string, TeacherLicenseRecord>();
       for (const item of list) {
-        if (item.phone) map.set(item.phone, item);
+        if (item.phone) {
+          // Default existing records to approved if not set
+          if (!item.status) {
+            item.status = 'approved';
+          }
+          map.set(item.phone, item);
+        }
       }
       return map;
     }
@@ -222,7 +231,7 @@ async function startServer() {
 
   // Register or sync teacher phone
   app.post('/api/license/register', (req: Request, res: Response) => {
-    let { phone } = req.body;
+    let { phone, name } = req.body;
     if (!phone) {
       res.status(400).json({ error: 'Missing phone number' });
       return;
@@ -230,23 +239,68 @@ async function startServer() {
     phone = phone.replace(/\D/g, '');
     if (phone.startsWith('84') && phone.length === 11) phone = '0' + phone.substring(2);
 
+    // Prevent anyone from registering admin's phone number as a teacher account
+    if (phone === '0973834541') {
+      res.status(403).json({
+        error: 'Số điện thoại này thuộc Ban Quản Trị hệ thống. Giáo viên không thể sử dụng số này để đăng ký. Quản trị viên vui lòng quét mã QR riêng biệt.',
+        isAdminPhone: true,
+      });
+      return;
+    }
+
     const licenses = loadLicenses();
     let record = licenses.get(phone);
     if (!record) {
+      // New phone registration -> Starts as PENDING approval!
       record = {
         phone,
+        name: name || undefined,
         registeredAt: Date.now(),
         usedSpins: 0,
         isKeyActive: false,
+        status: 'pending',
         lastActiveAt: Date.now(),
       };
       licenses.set(phone, record);
       saveLicenses(licenses);
-    } else {
-      record.lastActiveAt = Date.now();
-      saveLicenses(licenses);
+
+      res.json({
+        success: false,
+        isPending: true,
+        message: 'Đăng ký thành công! Số điện thoại đang chờ Ban Quản Trị phê duyệt trước khi sử dụng.',
+        record,
+      });
+      return;
     }
-    res.json(record);
+
+    // Existing record: update activity time
+    record.lastActiveAt = Date.now();
+    saveLicenses(licenses);
+
+    if (record.status === 'pending') {
+      res.json({
+        success: false,
+        isPending: true,
+        message: 'Số điện thoại này đang chờ Ban Quản Trị phê duyệt trước khi sử dụng.',
+        record,
+      });
+      return;
+    }
+
+    if (record.status === 'rejected') {
+      res.status(403).json({
+        error: 'Số điện thoại này đã bị từ chối hoặc tạm ngưng. Vui lòng liên hệ Admin qua Zalo 0973834541.',
+        record,
+      });
+      return;
+    }
+
+    // Status is 'approved'
+    res.json({
+      success: true,
+      isPending: false,
+      record,
+    });
   });
 
   // Record a spin call
@@ -261,21 +315,17 @@ async function startServer() {
 
     const licenses = loadLicenses();
     let record = licenses.get(phone);
-    if (!record) {
-      record = {
-        phone,
-        registeredAt: Date.now(),
-        usedSpins: 1,
-        isKeyActive: false,
-        lastActiveAt: Date.now(),
-      };
-    } else {
-      const targetSpins = typeof clientUsedSpins === 'number'
-        ? Math.max(record.usedSpins + 1, clientUsedSpins)
-        : record.usedSpins + 1;
-      record.usedSpins = targetSpins;
-      record.lastActiveAt = Date.now();
+    if (!record || record.status !== 'approved') {
+      res.status(403).json({ error: 'Tài khoản chưa được Ban Quản Trị phê duyệt' });
+      return;
     }
+
+    const targetSpins = typeof clientUsedSpins === 'number'
+      ? Math.max(record.usedSpins + 1, clientUsedSpins)
+      : record.usedSpins + 1;
+    record.usedSpins = targetSpins;
+    record.lastActiveAt = Date.now();
+
     licenses.set(phone, record);
     saveLicenses(licenses);
     res.json(record);
@@ -299,6 +349,7 @@ async function startServer() {
         registeredAt: Date.now(),
         usedSpins: 0,
         isKeyActive: true,
+        status: 'approved',
         keyType: keyType || 'unlimited',
         grantedSpins: grantedSpins || undefined,
         activeKey: key,
@@ -307,6 +358,7 @@ async function startServer() {
       };
     } else {
       record.isKeyActive = true;
+      record.status = 'approved';
       record.keyType = keyType || 'unlimited';
       record.grantedSpins = grantedSpins || undefined;
       record.activeKey = key;
@@ -331,7 +383,11 @@ async function startServer() {
 
     const licenses = loadLicenses();
     const record = licenses.get(phone) || null;
-    res.json({ record });
+    res.json({
+      record,
+      isApproved: record ? record.status === 'approved' : false,
+      isPending: record ? record.status === 'pending' : false,
+    });
   });
 
   // Admin: Get all teachers list with spin counts
@@ -344,6 +400,131 @@ async function startServer() {
     const licenses = loadLicenses();
     const list = Array.from(licenses.values()).sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
     res.json({ success: true, teachers: list, totalCount: list.length });
+  });
+
+  // Admin: Approve a pending teacher
+  app.post('/api/license/admin/approve', (req: Request, res: Response) => {
+    const { pin, phone } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    const licenses = loadLicenses();
+    let record = licenses.get(norm);
+    if (!record) {
+      record = {
+        phone: norm,
+        registeredAt: Date.now(),
+        usedSpins: 0,
+        isKeyActive: false,
+        status: 'approved',
+        approvedAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+    } else {
+      record.status = 'approved';
+      record.approvedAt = Date.now();
+      record.lastActiveAt = Date.now();
+    }
+    licenses.set(norm, record);
+    saveLicenses(licenses);
+    res.json({ success: true, teacher: record });
+  });
+
+  // Admin: Reject a teacher
+  app.post('/api/license/admin/reject', (req: Request, res: Response) => {
+    const { pin, phone } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    const licenses = loadLicenses();
+    let record = licenses.get(norm);
+    if (record) {
+      record.status = 'rejected';
+      record.lastActiveAt = Date.now();
+      licenses.set(norm, record);
+      saveLicenses(licenses);
+    }
+    res.json({ success: true, teacher: record });
+  });
+
+  // Admin: Delete a teacher
+  app.post('/api/license/admin/delete', (req: Request, res: Response) => {
+    const { pin, phone } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    const licenses = loadLicenses();
+    licenses.delete(norm);
+    saveLicenses(licenses);
+    res.json({ success: true, deleted: norm });
+  });
+
+  // Admin: Import Whitelist of Phone Numbers (From Excel / CSV / Batch list)
+  app.post('/api/license/admin/import-whitelist', (req: Request, res: Response) => {
+    const { pin, phones, keyType } = req.body;
+    if (!pin || !ADMIN_PINS.has(String(pin).trim())) {
+      res.status(401).json({ error: 'Mã PIN Admin không đúng' });
+      return;
+    }
+    if (!Array.isArray(phones) || phones.length === 0) {
+      res.status(400).json({ error: 'Danh sách số điện thoại rỗng' });
+      return;
+    }
+
+    const licenses = loadLicenses();
+    let count = 0;
+
+    for (const raw of phones) {
+      let norm = String(raw || '').replace(/\D/g, '');
+      if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+      if (!/^0[3|5|7|8|9]\d{8}$/.test(norm)) continue;
+      if (norm === '0973834541') continue;
+
+      let record = licenses.get(norm);
+      if (!record) {
+        record = {
+          phone: norm,
+          registeredAt: Date.now(),
+          usedSpins: 0,
+          isKeyActive: false,
+          status: 'approved',
+          approvedAt: Date.now(),
+          lastActiveAt: Date.now(),
+        };
+      } else {
+        record.status = 'approved';
+        record.approvedAt = Date.now();
+        record.lastActiveAt = Date.now();
+      }
+
+      if (keyType && (keyType === 'unlimited' || keyType === '500' || keyType === '200' || keyType === '100')) {
+        const key = generateLicenseKeyServer(norm, keyType);
+        record.isKeyActive = true;
+        record.keyType = keyType as any;
+        record.grantedSpins = keyType === 'unlimited' ? undefined : Number(keyType);
+        record.activeKey = key;
+        record.activatedAt = Date.now();
+      }
+
+      licenses.set(norm, record);
+      count++;
+    }
+
+    saveLicenses(licenses);
+    const list = Array.from(licenses.values()).sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
+    res.json({ success: true, count, teachers: list });
   });
 
   // Admin: Issue / Generate Key for a teacher
@@ -370,6 +551,7 @@ async function startServer() {
         registeredAt: Date.now(),
         usedSpins: 0,
         isKeyActive: true,
+        status: 'approved',
         keyType: type as any,
         grantedSpins: type === 'unlimited' ? undefined : Number(type),
         activeKey: key,
@@ -378,8 +560,9 @@ async function startServer() {
       };
     } else {
       record.isKeyActive = true;
+      record.status = 'approved';
       record.keyType = type as any;
-      record.grantedSpins = type === 'unlimited' ? undefined : Number(type),
+      record.grantedSpins = type === 'unlimited' ? undefined : Number(type);
       record.activeKey = key;
       record.activatedAt = Date.now();
       record.lastActiveAt = Date.now();
@@ -415,16 +598,178 @@ async function startServer() {
     res.json({ success: true, teacher: record });
   });
 
-  // Clean stale rooms older than 6 hours
+  // ================= QR ZALO AUTHENTICATION SESSIONS =================
+  interface QrAuthSession {
+    sessionId: string;
+    phone: string;
+    role: 'teacher' | 'admin';
+    createdAt: number;
+    status: 'waiting' | 'confirmed' | 'expired';
+    confirmedAt?: number;
+  }
+
+  const qrAuthSessions = new Map<string, QrAuthSession>();
+  const qrSessionListeners = new Map<string, Set<Response>>();
+
+  // Create QR Login Session (Teacher or Admin)
+  app.post('/api/auth/qr-create', (req: Request, res: Response) => {
+    let { phone, role = 'teacher' } = req.body;
+    let norm = String(phone || '').replace(/\D/g, '');
+    if (norm.startsWith('84') && norm.length === 11) norm = '0' + norm.substring(2);
+
+    if (role === 'admin') {
+      norm = '0973834541';
+    } else {
+      const licenses = loadLicenses();
+      const record = licenses.get(norm);
+      if (!record || record.status !== 'approved') {
+        res.status(403).json({ error: 'Số điện thoại này chưa được Ban Quản Trị phê duyệt' });
+        return;
+      }
+    }
+
+    const sessionId = 'AUTH_' + Math.random().toString(36).substring(2, 9).toUpperCase() + '_' + Date.now();
+    const session: QrAuthSession = {
+      sessionId,
+      phone: norm,
+      role: role as 'teacher' | 'admin',
+      createdAt: Date.now(),
+      status: 'waiting',
+    };
+    qrAuthSessions.set(sessionId, session);
+
+    res.json({
+      success: true,
+      sessionId,
+      phone: norm,
+      role: session.role,
+      createdAt: session.createdAt,
+      expiresInSeconds: 600,
+    });
+  });
+
+  // Poll QR Login Session
+  app.get('/api/auth/qr-poll', (req: Request, res: Response) => {
+    const sessionId = String(req.query.sessionId || '');
+    const session = qrAuthSessions.get(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Phiên đăng nhập không tồn tại hoặc đã hết hạn' });
+      return;
+    }
+
+    if (session.status === 'confirmed') {
+      const licenses = loadLicenses();
+      const record = licenses.get(session.phone);
+      res.json({
+        status: 'confirmed',
+        role: session.role,
+        phone: session.phone,
+        confirmedAt: session.confirmedAt,
+        license: record || null,
+        isAdmin: session.role === 'admin',
+      });
+      return;
+    }
+
+    res.json({
+      status: session.status,
+      role: session.role,
+      phone: session.phone,
+    });
+  });
+
+  // Confirm QR Login Session (called from phone / Zalo browser)
+  app.post('/api/auth/qr-confirm', (req: Request, res: Response) => {
+    const { sessionId } = req.body;
+    const session = qrAuthSessions.get(String(sessionId || ''));
+    if (!session) {
+      res.status(404).json({ error: 'Phiên xác thực không tồn tại hoặc đã hết hạn' });
+      return;
+    }
+
+    session.status = 'confirmed';
+    session.confirmedAt = Date.now();
+
+    // Update teacher active timestamp
+    if (session.role === 'teacher') {
+      const licenses = loadLicenses();
+      const record = licenses.get(session.phone);
+      if (record) {
+        record.lastActiveAt = Date.now();
+        licenses.set(session.phone, record);
+        saveLicenses(licenses);
+      }
+    }
+
+    // Notify connected SSE stream
+    const listeners = qrSessionListeners.get(session.sessionId);
+    if (listeners && listeners.size > 0) {
+      const data = `data: ${JSON.stringify({
+        type: 'confirmed',
+        sessionId: session.sessionId,
+        phone: session.phone,
+        role: session.role,
+      })}\n\n`;
+      listeners.forEach((client) => {
+        try { client.write(data); } catch {}
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Xác nhận đăng nhập thành công',
+      phone: session.phone,
+      role: session.role,
+    });
+  });
+
+  // SSE Stream for Instant Real-Time Login
+  app.get('/api/auth/qr-stream/:sessionId', (req: Request, res: Response) => {
+    const sessionId = req.params.sessionId;
+    const session = qrAuthSessions.get(sessionId);
+    if (!session) {
+      res.status(404).end();
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    if (!qrSessionListeners.has(sessionId)) {
+      qrSessionListeners.set(sessionId, new Set());
+    }
+    const listeners = qrSessionListeners.get(sessionId)!;
+    listeners.add(res);
+
+    if (session.status === 'confirmed') {
+      res.write(`data: ${JSON.stringify({ type: 'confirmed', sessionId, phone: session.phone, role: session.role })}\n\n`);
+    }
+
+    req.on('close', () => {
+      listeners.delete(res);
+    });
+  });
+
+  // Clean stale rooms and QR sessions older than 6 hours
   setInterval(() => {
     const now = Date.now();
+    for (const [id, s] of qrAuthSessions.entries()) {
+      if (now - s.createdAt > 15 * 60 * 1000) {
+        qrAuthSessions.delete(id);
+        qrSessionListeners.delete(id);
+      }
+    }
     for (const [id, r] of rooms.entries()) {
       if (now - r.lastActive > 6 * 3600 * 1000) {
         rooms.delete(id);
         roomClients.delete(id);
       }
     }
-  }, 30 * 60 * 1000);
+  }, 5 * 60 * 1000);
 
   // Vite Integration
   if (process.env.NODE_ENV === 'production') {

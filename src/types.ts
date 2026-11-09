@@ -42,15 +42,19 @@ export interface RemoteRoomState {
 }
 
 export type LicenseKeyType = 'unlimited' | '500' | '200' | '100';
+export type TeacherApprovalStatus = 'approved' | 'pending' | 'rejected';
 
 export interface TeacherLicense {
   phone: string;
+  name?: string;
   registeredAt: number;
   usedSpins: number;
   isKeyActive: boolean;
+  status: TeacherApprovalStatus;
   keyType?: LicenseKeyType;
   grantedSpins?: number;
   activeKey?: string;
   activatedAt?: number;
   lastActiveAt?: number;
+  approvedAt?: number;
 }

@@ -122,16 +122,28 @@ export function checkCanSpin(license: TeacherLicense | null): {
   remaining: number;
   isUnlimited: boolean;
   usedSpins: number;
+  isApproved: boolean;
 } {
   if (!license || !license.phone) {
-    return { canSpin: false, remaining: 0, isUnlimited: false, usedSpins: 0 };
+    return { canSpin: false, remaining: 0, isUnlimited: false, usedSpins: 0, isApproved: false };
+  }
+
+  // If status is not approved, teacher cannot spin!
+  if (license.status && license.status !== 'approved') {
+    return {
+      canSpin: false,
+      remaining: 0,
+      isUnlimited: false,
+      usedSpins: license.usedSpins || 0,
+      isApproved: false,
+    };
   }
 
   const used = license.usedSpins || 0;
 
   if (license.isKeyActive) {
     if (license.keyType === 'unlimited') {
-      return { canSpin: true, remaining: 999999, isUnlimited: true, usedSpins: used };
+      return { canSpin: true, remaining: 999999, isUnlimited: true, usedSpins: used, isApproved: true };
     }
     const granted = license.grantedSpins || 500;
     const remaining = Math.max(0, granted - used);
@@ -140,6 +152,7 @@ export function checkCanSpin(license: TeacherLicense | null): {
       remaining,
       isUnlimited: false,
       usedSpins: used,
+      isApproved: true,
     };
   }
 
@@ -150,6 +163,7 @@ export function checkCanSpin(license: TeacherLicense | null): {
     remaining,
     isUnlimited: false,
     usedSpins: used,
+    isApproved: true,
   };
 }
 
@@ -177,24 +191,33 @@ export function saveStoredLicense(license: TeacherLicense): void {
   }
 }
 
-/**
- * API: Register or retrieve phone on backend, merging with local storage
- */
-export async function apiRegisterPhone(phone: string): Promise<TeacherLicense> {
-  const normPhone = normalizePhoneNumber(phone);
-  const local = getStoredLicense();
+export interface RegisterPhoneResult {
+  success: boolean;
+  isPending: boolean;
+  message?: string;
+  license: TeacherLicense;
+}
 
-  const baseLicense: TeacherLicense = local?.phone === normPhone
-    ? local
-    : {
+/**
+ * API: Register or retrieve phone on backend, verifying approval status
+ */
+export async function apiRegisterPhone(phone: string): Promise<RegisterPhoneResult> {
+  const normPhone = normalizePhoneNumber(phone);
+
+  if (normPhone === ADMIN_ZALO_PHONE) {
+    return {
+      success: false,
+      isPending: false,
+      message: 'Số điện thoại này thuộc Ban Quản Trị hệ thống. Giáo viên không thể sử dụng số này để đăng ký.',
+      license: {
         phone: normPhone,
         registeredAt: Date.now(),
         usedSpins: 0,
         isKeyActive: false,
-        lastActiveAt: Date.now(),
-      };
-
-  saveStoredLicense(baseLicense);
+        status: 'rejected',
+      },
+    };
+  }
 
   try {
     const res = await fetch('/api/license/register', {
@@ -202,26 +225,84 @@ export async function apiRegisterPhone(phone: string): Promise<TeacherLicense> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: normPhone }),
     });
-    if (res.ok) {
-      const serverData: TeacherLicense = await res.json();
-      // Merge: keep higher usedSpins and activeKey if present
-      const merged: TeacherLicense = {
-        ...baseLicense,
-        ...serverData,
-        usedSpins: Math.max(baseLicense.usedSpins, serverData.usedSpins || 0),
-        isKeyActive: baseLicense.isKeyActive || serverData.isKeyActive,
-        keyType: baseLicense.keyType || serverData.keyType,
-        grantedSpins: baseLicense.grantedSpins || serverData.grantedSpins,
-        activeKey: baseLicense.activeKey || serverData.activeKey,
+    const data = await res.json();
+    if (!res.ok) {
+      return {
+        success: false,
+        isPending: false,
+        message: data.error || 'Đăng ký không thành công.',
+        license: {
+          phone: normPhone,
+          registeredAt: Date.now(),
+          usedSpins: 0,
+          isKeyActive: false,
+          status: 'rejected',
+        },
       };
-      saveStoredLicense(merged);
-      return merged;
+    }
+
+    const serverRecord: TeacherLicense = data.record;
+    saveStoredLicense(serverRecord);
+
+    if (serverRecord.status === 'approved') {
+      return {
+        success: true,
+        isPending: false,
+        license: serverRecord,
+      };
+    } else {
+      return {
+        success: false,
+        isPending: true,
+        message: data.message || 'Số điện thoại đang chờ Ban Quản Trị phê duyệt.',
+        license: serverRecord,
+      };
     }
   } catch (err) {
-    console.warn('Backend license sync offline, using local data:', err);
+    console.warn('Backend license sync error:', err);
+    const fallback: TeacherLicense = {
+      phone: normPhone,
+      registeredAt: Date.now(),
+      usedSpins: 0,
+      isKeyActive: false,
+      status: 'pending',
+    };
+    saveStoredLicense(fallback);
+    return {
+      success: false,
+      isPending: true,
+      message: 'Đã gửi thông tin. Số điện thoại đang chờ Admin phê duyệt.',
+      license: fallback,
+    };
   }
+}
 
-  return baseLicense;
+/**
+ * API: Check approval status for a phone
+ */
+export async function apiCheckTeacherStatus(phone: string): Promise<{
+  isApproved: boolean;
+  isPending: boolean;
+  record: TeacherLicense | null;
+}> {
+  const norm = normalizePhoneNumber(phone);
+  try {
+    const res = await fetch(`/api/license/status?phone=${norm}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.record) {
+        saveStoredLicense(data.record);
+      }
+      return {
+        isApproved: Boolean(data.isApproved),
+        isPending: Boolean(data.isPending),
+        record: data.record || null,
+      };
+    }
+  } catch (e) {
+    console.warn('Status check failed:', e);
+  }
+  return { isApproved: false, isPending: true, record: null };
 }
 
 /**
@@ -229,11 +310,12 @@ export async function apiRegisterPhone(phone: string): Promise<TeacherLicense> {
  */
 export async function apiRecordSpin(phone: string): Promise<TeacherLicense> {
   const normPhone = normalizePhoneNumber(phone);
-  const current = getStoredLicense() || {
+  const current: TeacherLicense = getStoredLicense() || {
     phone: normPhone,
     registeredAt: Date.now(),
     usedSpins: 0,
     isKeyActive: false,
+    status: 'approved',
   };
 
   current.usedSpins = (current.usedSpins || 0) + 1;
@@ -265,15 +347,17 @@ export async function apiActivateLicenseKey(
     return { success: false, message: verification.message || 'Mã key không hợp lệ.' };
   }
 
-  const current = getStoredLicense() || {
+  const current: TeacherLicense = getStoredLicense() || {
     phone: normPhone,
     registeredAt: Date.now(),
     usedSpins: 0,
     isKeyActive: false,
+    status: 'approved',
   };
 
   const updated: TeacherLicense = {
     ...current,
+    status: 'approved',
     phone: normPhone,
     isKeyActive: true,
     keyType: verification.keyType,
