@@ -22,6 +22,7 @@ import {
   apiCheckTeacherStatus,
   RegisterPhoneResult,
   getStoredLicense,
+  saveStoredLicense,
 } from '../utils/licenseManager';
 import { sound } from '../utils/audio';
 import { TeacherLicense } from '../types';
@@ -99,9 +100,19 @@ export const PhoneRegisterModal: React.FC<PhoneRegisterModalProps> = ({
     sound.playFanfare();
     setIsSuccess(true);
     setTimeout(() => {
-      if (targetLicense) {
-        onApproved(targetLicense);
-      }
+      const activePhone = targetPhone || phone;
+      const approvedLic: TeacherLicense = {
+        ...(targetLicense || {}),
+        phone: activePhone,
+        status: 'approved',
+        registeredAt: targetLicense?.registeredAt || Date.now(),
+        approvedAt: Date.now(),
+        usedSpins: targetLicense?.usedSpins || 0,
+        isKeyActive: targetLicense?.isKeyActive || false,
+      };
+      approvedLic.status = 'approved';
+      saveStoredLicense(approvedLic);
+      onApproved(approvedLic);
     }, 1200);
   };
 

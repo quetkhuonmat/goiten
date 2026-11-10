@@ -94,7 +94,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   isAdminLoggedIn = false,
 }) => {
   const isPicking = appStage === 'picking';
-  const hasFaces = detectedFaces.length > 0;
+  const hasFaces = detectedFaces.length > 0 || studentsCount > 0;
 
   return (
     <div className="flex flex-col justify-between h-full bg-slate-900/95 border-l border-cyan-500/30 p-4 sm:p-5 backdrop-blur-md text-white select-none overflow-y-auto">
@@ -256,7 +256,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
               <div className="text-xs font-cyber font-bold text-white">
                 {license?.isKeyActive
-                  ? (license.keyType === 'unlimited' ? 'Bản quyền Vĩnh viễn' : `Còn ${(license.grantedSpins || 500) - (license.usedSpins || 0)} lượt quay`)
+                  ? (license.keyType === 'unlimited' ? 'Bản quyền Vĩnh viễn' : `Còn ${Math.max(0, (license.grantedSpins || (license.keyType ? Number(license.keyType) : 500)) - (license.usedSpins || 0))} lượt quay`)
                   : (license?.usedSpins || 0) >= FREE_TRIAL_SPINS
                   ? 'Hết lượt quay (Bấm để kích hoạt)'
                   : 'Tài khoản Giáo viên (Đang hoạt động)'}
@@ -269,21 +269,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </span>
         </div>
 
-        {/* Real-Time Automatic Face Detection Status */}
+        {/* Real-Time Automatic Face Detection & Album Status */}
         <div className="mb-4 bg-slate-950/80 p-3.5 rounded-2xl border border-emerald-500/40 shadow-lg">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-xs font-cyber text-slate-200">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
-              <span className="font-bold text-emerald-400">TỰ ĐỘNG NHẬN DIỆN KHUÔN MẶT</span>
+              <span className="font-bold text-emerald-400">
+                {detectedFaces.length > 0
+                  ? 'TỰ ĐỘNG NHẬN DIỆN KHUÔN MẶT'
+                  : studentsCount > 0
+                  ? 'DANH SÁCH ẢNH CẢ LỚP'
+                  : 'TỰ ĐỘNG NHẬN DIỆN KHUÔN MẶT'}
+              </span>
             </div>
             <span className="font-mono text-emerald-300 font-black text-sm px-2.5 py-0.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 shadow-sm">
-              {detectedFaces.length} học sinh
+              {detectedFaces.length > 0 ? `${detectedFaces.length} học sinh` : `${studentsCount} học sinh`}
             </span>
           </div>
 
           <p className="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
             {detectedFaces.length > 0
               ? `Hệ thống đang tự động theo dõi và đóng khung ${detectedFaces.length} học sinh theo thời gian thực.`
+              : studentsCount > 0
+              ? `Đã sẵn sàng ${studentsCount} ảnh học sinh trong danh sách cả lớp để quay chọn ngẫu nhiên.`
               : 'Đang mở camera để tự động phát hiện và đóng khung khuôn mặt học sinh trong lớp...'}
           </p>
 

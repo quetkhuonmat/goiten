@@ -41,7 +41,7 @@ export interface RemoteRoomState {
   score: number;
 }
 
-export type LicenseKeyType = 'unlimited' | '500' | '200' | '100';
+export type LicenseKeyType = 'unlimited' | '500' | '200' | '100' | '50' | '20';
 export type TeacherApprovalStatus = 'approved' | 'pending' | 'rejected';
 
 export interface TeacherLicense {

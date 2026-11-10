@@ -102,6 +102,12 @@ export function verifyLicenseKey(
   } else if (typeCode === '100') {
     keyType = '100';
     grantedSpins = 100;
+  } else if (typeCode === '50') {
+    keyType = '50';
+    grantedSpins = 50;
+  } else if (typeCode === '20') {
+    keyType = '20';
+    grantedSpins = 20;
   } else {
     return { valid: false, message: 'Loại gói bản quyền không xác định.' };
   }
@@ -145,7 +151,7 @@ export function checkCanSpin(license: TeacherLicense | null): {
     if (license.keyType === 'unlimited') {
       return { canSpin: true, remaining: 999999, isUnlimited: true, usedSpins: used, isApproved: true };
     }
-    const granted = license.grantedSpins || 500;
+    const granted = license.grantedSpins || (license.keyType ? Number(license.keyType) : 500);
     const remaining = Math.max(0, granted - used);
     return {
       canSpin: remaining > 0,
@@ -174,7 +180,11 @@ export function getStoredLicense(): TeacherLicense | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.phone && !parsed.status) {
+      parsed.status = 'approved';
+    }
+    return parsed;
   } catch {
     return null;
   }

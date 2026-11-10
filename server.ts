@@ -10,7 +10,7 @@ interface TeacherLicenseRecord {
   usedSpins: number;
   isKeyActive: boolean;
   status: 'approved' | 'pending' | 'rejected';
-  keyType?: 'unlimited' | '500' | '200' | '100';
+  keyType?: 'unlimited' | '500' | '200' | '100' | '50' | '20';
   grantedSpins?: number;
   activeKey?: string;
   activatedAt?: number;
@@ -509,7 +509,7 @@ async function startServer() {
         record.lastActiveAt = Date.now();
       }
 
-      if (keyType && (keyType === 'unlimited' || keyType === '500' || keyType === '200' || keyType === '100')) {
+      if (keyType && (keyType === 'unlimited' || keyType === '500' || keyType === '200' || keyType === '100' || keyType === '50' || keyType === '20')) {
         const key = generateLicenseKeyServer(norm, keyType);
         record.isKeyActive = true;
         record.keyType = keyType as any;

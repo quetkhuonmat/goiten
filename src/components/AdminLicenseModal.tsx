@@ -551,6 +551,8 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
                   <option value="500">Gói 500 lượt quay</option>
                   <option value="200">Gói 200 lượt quay</option>
                   <option value="100">Gói 100 lượt quay</option>
+                  <option value="50">Gói 50 lượt quay</option>
+                  <option value="20">Gói 20 lượt quay</option>
                 </select>
 
                 <button
@@ -976,6 +978,9 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
                   <option value="unlimited">Cấp Key Vĩnh Viễn luôn</option>
                   <option value="500">Cấp Key 500 lượt</option>
                   <option value="200">Cấp Key 200 lượt</option>
+                  <option value="100">Cấp Key 100 lượt</option>
+                  <option value="50">Cấp Key 50 lượt</option>
+                  <option value="20">Cấp Key 20 lượt</option>
                 </select>
               </div>
 

@@ -166,15 +166,16 @@ export default function App() {
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
 
   // Teacher License & Quota Management
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => isStoredAdminAuth());
   const [license, setLicense] = useState<TeacherLicense | null>(() => getStoredLicense());
   const [isPhoneRegisterOpen, setIsPhoneRegisterOpen] = useState<boolean>(() => {
+    if (isStoredAdminAuth()) return false;
     const saved = getStoredLicense();
     return !saved || !saved.phone || saved.status !== 'approved';
   });
   const [isQuotaExceededOpen, setIsQuotaExceededOpen] = useState<boolean>(false);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => isStoredAdminAuth());
   const [isAdminQrModalOpen, setIsAdminQrModalOpen] = useState<boolean>(false);
 
   const handleRegisterPhone = async (phone: string): Promise<RegisterPhoneResult> => {
@@ -760,27 +761,32 @@ export default function App() {
   const handleStartPick = () => {
     if (appStage === 'picking') return;
 
-    // 1. Check teacher phone registration & admin approval
-    if (!license || !license.phone || license.status !== 'approved') {
-      setIsPhoneRegisterOpen(true);
-      return;
+    // 1. If not admin, check teacher phone registration & admin approval
+    if (!isAdminLoggedIn) {
+      if (!license || !license.phone || license.status !== 'approved') {
+        setIsPhoneRegisterOpen(true);
+        return;
+      }
+
+      // 2. Check 20 free trial spins or active license key quota
+      const quota = checkCanSpin(license);
+      if (!quota.canSpin) {
+        sound.playClick();
+        setIsQuotaExceededOpen(true);
+        return;
+      }
+
+      // 3. Record spin call on backend and local cumulative counter
+      if (license.phone) {
+        apiRecordSpin(license.phone).then((updated) => {
+          setLicense({ ...updated });
+        });
+      }
     }
 
-    // 2. Check 20 free trial spins or active license key quota
-    const quota = checkCanSpin(license);
-    if (!quota.canSpin) {
-      sound.playClick();
-      setIsQuotaExceededOpen(true);
-      return;
-    }
-
-    // 3. Record spin call on backend and local cumulative counter
-    apiRecordSpin(license.phone).then((updated) => {
-      setLicense({ ...updated });
-    });
-
-    // A) PICK FROM CLASS ALBUM ROSTER
-    if (mainViewMode === 'album') {
+    // A) PICK FROM CLASS ALBUM ROSTER (if in album mode or when students are loaded and no camera faces)
+    const isPickingAlbum = mainViewMode === 'album' || (detectedFaces.length === 0 && students.length > 0);
+    if (isPickingAlbum) {
       if (students.length === 0) {
         setIsClassAlbumOpen(true);
         return;
@@ -828,10 +834,14 @@ export default function App() {
           setAppStage('locked');
           sound.playTargetLocked();
 
-          // Mark as called
-          setStudents((prev) =>
-            prev.map((s) => (s.id === winner.id ? { ...s, called: true } : s))
-          );
+          // Mark as called and save to localStorage
+          setStudents((prev) => {
+            const next = prev.map((s) => (s.id === winner.id ? { ...s, called: true } : s));
+            try {
+              localStorage.setItem('class_students_album_v1', JSON.stringify(next));
+            } catch {}
+            return next;
+          });
 
           const now = new Date();
           const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;

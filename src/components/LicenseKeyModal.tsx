@@ -187,7 +187,7 @@ export const LicenseKeyModal: React.FC<LicenseKeyModalProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-xs text-slate-400">Lượt quay khả dụng:</span>
               <span className="text-sm font-cyber font-bold text-cyan-300">
-                {isUnlimited ? 'Không giới hạn' : `${Math.max(0, (license?.grantedSpins || 500) - usedSpins)} lượt`}
+                {isUnlimited ? 'Không giới hạn' : `${Math.max(0, (license?.grantedSpins || (license?.keyType ? Number(license.keyType) : 500)) - usedSpins)} lượt`}
               </span>
             </div>
           )}
