@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Teacher license registration and quota status",
+      "type": "object",
+      "properties": {
+        "phone": {
+          "type": "string",
+          "description": "10-digit Vietnamese phone number",
+          "pattern": "^0[0-9]{9}$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional teacher name"
+        },
+        "registeredAt": {
+          "type": "number",
+          "description": "Timestamp when registered"
+        },
+        "usedSpins": {
+          "type": "number",
+          "description": "Number of spins used"
+        },
+        "isKeyActive": {
+          "type": "boolean",
+          "description": "Whether a license key is active"
+        },
+        "status": {
+          "type": "string",
+          "description": "Approval status",
+          "enum": ["approved", "pending", "rejected"]
+        },
+        "keyType": {
+          "type": "string",
+          "description": "License package type",
+          "enum": ["unlimited", "500", "200", "100", "50", "20"]
+        },
+        "grantedSpins": {
+          "type": "number",
+          "description": "Number of spins granted by the key"
+        },
+        "activeKey": {
+          "type": "string",
+          "description": "Active license key"
+        },
+        "activatedAt": {
+          "type": "number",
+          "description": "Timestamp when key was activated"
+        },
+        "lastActiveAt": {
+          "type": "number",
+          "description": "Timestamp when last active"
+        },
+        "approvedAt": {
+          "type": "number",
+          "description": "Timestamp when approved by admin"
+        }
+      },
+      "required": ["phone", "status"]
+    }
+  },
+  "firestore": {
+    "/teachers/{phone}": {
+      "schema": "Teacher",
+      "description": "Teacher license accounts and real-time approval status"
+    }
+  }
+}

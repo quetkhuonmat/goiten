@@ -23,6 +23,7 @@ import {
   RegisterPhoneResult,
   getStoredLicense,
   saveStoredLicense,
+  subscribeTeacherDoc,
 } from '../utils/licenseManager';
 import { sound } from '../utils/audio';
 import { TeacherLicense } from '../types';
@@ -329,6 +330,20 @@ export const PhoneRegisterModal: React.FC<PhoneRegisterModalProps> = ({
       stopListening();
     }
   }, [viewState, useCamera, targetPhone]);
+
+  // Real-time Cloud Firestore listener for instant admin approval
+  useEffect(() => {
+    if (viewState === 'pending' && targetPhone) {
+      const unsub = subscribeTeacherDoc(targetPhone, (updated) => {
+        if (updated.status === 'approved') {
+          sound.playFanfare();
+          setTargetLicense(updated);
+          setViewState('qr-verify');
+        }
+      });
+      return () => unsub();
+    }
+  }, [viewState, targetPhone]);
 
   if (!isOpen) return null;
 

@@ -35,6 +35,13 @@ import {
   normalizePhoneNumber,
   isStoredAdminAuth,
   setStoredAdminAuth,
+  subscribeAllTeachers,
+  apiCloudApproveTeacher,
+  apiCloudRejectTeacher,
+  apiCloudDeleteTeacher,
+  apiCloudResetSpins,
+  apiCloudGenerateKey,
+  apiCloudBatchImportTeachers,
 } from '../utils/licenseManager';
 import { sound } from '../utils/audio';
 
@@ -80,11 +87,21 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
   useEffect(() => {
     if (isOpen && isStoredAdminAuth()) {
       setIsAuthenticated(true);
-      fetchTeachers(ADMIN_DEFAULT_PIN);
     }
   }, [isOpen]);
 
-  // Load teachers from backend
+  // Real-time Cloud Firestore subscription for instant updates across devices
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated) return;
+    setIsLoading(true);
+    const unsub = subscribeAllTeachers((list) => {
+      setTeachers(list);
+      setIsLoading(false);
+    });
+    return () => unsub();
+  }, [isOpen, isAuthenticated]);
+
+  // Fallback manual fetch if needed
   const fetchTeachers = async (adminPin: string) => {
     setIsLoading(true);
     try {
@@ -95,10 +112,12 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
       });
       if (res.ok) {
         const data = await res.json();
-        setTeachers(data.teachers || []);
+        if (data.teachers && data.teachers.length > 0) {
+          setTeachers(data.teachers);
+        }
       }
     } catch (err) {
-      console.warn('Cannot fetch admin teacher list:', err);
+      console.warn('Cannot fetch local admin teacher list:', err);
     } finally {
       setIsLoading(false);
     }
@@ -112,100 +131,88 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
       setStoredAdminAuth(true);
       setIsAuthenticated(true);
       setPinError(null);
-      fetchTeachers(cleanPin);
     } else {
       sound.playClick();
       setPinError('Mã PIN không đúng. Gợi ý: Số điện thoại Admin (0973834541).');
     }
   };
 
-  // 1-Click Approve
+  // 1-Click Approve on Cloud Firestore
   const handleApproveTeacher = async (targetPhone: string) => {
     sound.playClick();
-    try {
-      const res = await fetch('/api/license/admin/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
-      });
-      if (res.ok) {
-        sound.playFanfare();
-        setActionMessage(`Đã phê duyệt thành công số điện thoại ${targetPhone}!`);
-        setTimeout(() => setActionMessage(null), 3000);
-        fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-      }
-    } catch {
-      alert('Không thể phê duyệt, vui lòng thử lại.');
+    const ok = await apiCloudApproveTeacher(targetPhone);
+    if (ok) {
+      sound.playFanfare();
+      setActionMessage(`Đã phê duyệt thành công số điện thoại ${targetPhone} trên Đám mây!`);
+      setTimeout(() => setActionMessage(null), 3000);
     }
+
+    // Local API ping
+    fetch('/api/license/admin/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
+    }).catch(() => {});
   };
 
-  // Reject
+  // Reject on Cloud Firestore
   const handleRejectTeacher = async (targetPhone: string) => {
     sound.playClick();
-    try {
-      const res = await fetch('/api/license/admin/reject', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
-      });
-      if (res.ok) {
-        setActionMessage(`Đã từ chối số điện thoại ${targetPhone}.`);
-        setTimeout(() => setActionMessage(null), 3000);
-        fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-      }
-    } catch {
-      alert('Thao tác thất bại.');
+    const ok = await apiCloudRejectTeacher(targetPhone);
+    if (ok) {
+      setActionMessage(`Đã từ chối số điện thoại ${targetPhone}.`);
+      setTimeout(() => setActionMessage(null), 3000);
     }
+
+    fetch('/api/license/admin/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
+    }).catch(() => {});
   };
 
-  // Delete
+  // Delete on Cloud Firestore
   const handleDeleteTeacher = async (targetPhone: string) => {
     sound.playClick();
-    try {
-      const res = await fetch('/api/license/admin/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
-      });
-      if (res.ok) {
-        setActionMessage(`Đã xóa số điện thoại ${targetPhone} khỏi hệ thống.`);
-        setTimeout(() => setActionMessage(null), 3000);
-        fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-      }
-    } catch {
-      alert('Không thể xóa số điện thoại.');
+    const ok = await apiCloudDeleteTeacher(targetPhone);
+    if (ok) {
+      setActionMessage(`Đã xóa số điện thoại ${targetPhone} khỏi hệ thống.`);
+      setTimeout(() => setActionMessage(null), 3000);
     }
+
+    fetch('/api/license/admin/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
+    }).catch(() => {});
   };
 
   const handleGenerateKeyForPhone = async (targetPhone: string, type: LicenseKeyType) => {
     sound.playClick();
-    const norm = normalizePhoneNumber(targetPhone);
-    const key = generateLicenseKey(norm, type);
-    setGeneratedKey(key);
+    const res = await apiCloudGenerateKey(targetPhone, type);
+    setGeneratedKey(res.key);
+    sound.playFanfare();
 
-    try {
-      await fetch('/api/license/admin/generate-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: norm, type }),
-      });
-      fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-      sound.playFanfare();
-    } catch {}
+    fetch('/api/license/admin/generate-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone, type }),
+    }).catch(() => {});
   };
 
   const handleResetSpins = async (targetPhone: string) => {
     sound.playClick();
-    try {
-      await fetch('/api/license/admin/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
-      });
+    const ok = await apiCloudResetSpins(targetPhone);
+    if (ok) {
       setActionMessage(`Đã đặt lại số lượt quay của ${targetPhone} về 0.`);
       setTimeout(() => setActionMessage(null), 3000);
-      fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-    } catch {}
+    }
+
+    fetch('/api/license/admin/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() || ADMIN_DEFAULT_PIN, phone: targetPhone }),
+    }).catch(() => {});
   };
 
   // Parse Excel / CSV File
@@ -276,7 +283,7 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
     setImportPhonesList(unique);
   };
 
-  // Submit Import Whitelist
+  // Submit Import Whitelist directly to Cloud Firestore
   const handleConfirmImportWhitelist = async () => {
     if (importPhonesList.length === 0) {
       alert('Vui lòng tải file Excel hoặc dán danh sách số điện thoại trước khi xác nhận.');
@@ -286,7 +293,16 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
     setIsImporting(true);
     sound.playClick();
     try {
-      const res = await fetch('/api/license/admin/import-whitelist', {
+      const count = await apiCloudBatchImportTeachers(importPhonesList, importKeyType);
+      sound.playFanfare();
+      setIsImportModalOpen(false);
+      setImportPhonesList([]);
+      setImportRawText('');
+      setActionMessage(`Đã phê duyệt thành công ${count} giáo viên vào Cơ sở dữ liệu đám mây!`);
+      setTimeout(() => setActionMessage(null), 4000);
+
+      // Local API backup ping
+      fetch('/api/license/admin/import-whitelist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -294,23 +310,9 @@ export const AdminLicenseModal: React.FC<AdminLicenseModalProps> = ({
           phones: importPhonesList,
           keyType: importKeyType === 'trial' ? undefined : importKeyType,
         }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        sound.playFanfare();
-        setIsImportModalOpen(false);
-        setImportPhonesList([]);
-        setImportRawText('');
-        setActionMessage(`Đã phê duyệt thành công ${data.count} giáo viên vào hệ thống!`);
-        setTimeout(() => setActionMessage(null), 4000);
-        fetchTeachers(pin.trim() || ADMIN_DEFAULT_PIN);
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Có lỗi xảy ra khi nhập danh sách.');
-      }
+      }).catch(() => {});
     } catch {
-      alert('Chưa thể kết nối máy chủ để nhập danh sách.');
+      alert('Chưa thể nhập danh sách lên đám mây, vui lòng thử lại.');
     } finally {
       setIsImporting(false);
     }

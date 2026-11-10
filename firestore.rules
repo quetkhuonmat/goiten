@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isValidPhone(phone) {
+      return phone is string && phone.size() >= 9 && phone.size() <= 15;
+    }
+
+    // Teacher registrations and approval management
+    match /teachers/{phone} {
+      allow read: if true;
+      allow create, update: if isValidPhone(phone) && request.resource.data.phone is string;
+      allow delete: if true;
+    }
+
+    // Connection verification
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
