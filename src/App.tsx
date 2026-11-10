@@ -177,6 +177,18 @@ export default function App() {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => isStoredAdminAuth());
   const [isAdminQrModalOpen, setIsAdminQrModalOpen] = useState<boolean>(false);
 
+  // STRICT ACCESS CONTROL STATE & ENFORCEMENT:
+  const isTeacherAuthorized = Boolean(license?.phone && license?.status === 'approved');
+  const isAuthorized = isAdminLoggedIn || isTeacherAuthorized;
+
+  // Whenever the user is neither an approved teacher nor logged in as admin,
+  // and the Admin QR scanner modal is not open, the phone registration gate MUST be forced open!
+  useEffect(() => {
+    if (!isAuthorized && !isAdminQrModalOpen) {
+      setIsPhoneRegisterOpen(true);
+    }
+  }, [isAuthorized, isAdminQrModalOpen]);
+
   const handleRegisterPhone = async (phone: string): Promise<RegisterPhoneResult> => {
     const res = await apiRegisterPhone(phone);
     if (res.license) {
@@ -529,6 +541,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!isAuthorized) return;
     const isMobile = isMobileDevice();
     const initialFacing = isMobile ? 'environment' : 'user';
     const savedId = localStorage.getItem('preferred_main_cam_id');
@@ -539,7 +552,7 @@ export default function App() {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, []);
+  }, [isAuthorized]);
 
   // Torch toggle
   const handleToggleTorch = async () => {
@@ -1185,16 +1198,34 @@ export default function App() {
             isFullscreen={isFullscreen}
             onToggleFullscreen={handleToggleFullscreen}
             callHistory={callHistory}
-            onOpenHistory={() => setIsHistoryOpen(true)}
+            onOpenHistory={() => {
+              if (!isAuthorized) {
+                setIsPhoneRegisterOpen(true);
+                return;
+              }
+              setIsHistoryOpen(true);
+            }}
             excludeCalled={excludeCalled}
             onToggleExcludeCalled={setExcludeCalled}
             hasTorch={hasTorch}
             torchActive={torchActive}
             onToggleTorch={handleToggleTorch}
-            onOpenRemoteConnect={() => setIsRemoteModalOpen(true)}
+            onOpenRemoteConnect={() => {
+              if (!isAuthorized) {
+                setIsPhoneRegisterOpen(true);
+                return;
+              }
+              setIsRemoteModalOpen(true);
+            }}
             isPhoneConnected={isPhoneConnected}
             studentsCount={students.length}
-            onOpenClassAlbum={() => setIsClassAlbumOpen(true)}
+            onOpenClassAlbum={() => {
+              if (!isAuthorized) {
+                setIsPhoneRegisterOpen(true);
+                return;
+              }
+              setIsClassAlbumOpen(true);
+            }}
             license={license}
             onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
             onOpenAdminModal={() => setIsAdminModalOpen(true)}
@@ -1260,7 +1291,7 @@ export default function App() {
 
       {/* Teacher Phone Registration Modal (Whitelist or Approval Required) */}
       <PhoneRegisterModal
-        isOpen={isPhoneRegisterOpen}
+        isOpen={isPhoneRegisterOpen && !isAdminQrModalOpen}
         onRegister={handleRegisterPhone}
         onApproved={handleTeacherApproved}
         onOpenAdminQr={() => {
@@ -1295,19 +1326,35 @@ export default function App() {
         isOpen={isAdminModalOpen}
         onClose={() => {
           setIsAdminModalOpen(false);
-          setLicense(getStoredLicense());
+          const updated = getStoredLicense();
+          setLicense(updated);
+          if (!isAdminLoggedIn && (!updated || updated.status !== 'approved')) {
+            setIsPhoneRegisterOpen(true);
+          }
         }}
         onOpenAdminQr={() => setIsAdminQrModalOpen(true)}
         onAdminLogout={() => {
           setIsAdminLoggedIn(false);
           setStoredAdminAuth(false);
+          setIsAdminModalOpen(false);
+          const updated = getStoredLicense();
+          if (!updated || updated.status !== 'approved') {
+            setIsPhoneRegisterOpen(true);
+          }
         }}
       />
 
       {/* Admin Zalo QR Code Scanner Modal (0973834541) */}
       <AdminQrScanModal
         isOpen={isAdminQrModalOpen}
-        onClose={() => setIsAdminQrModalOpen(false)}
+        onClose={() => {
+          setIsAdminQrModalOpen(false);
+          // CRITICAL SECURITY FIX: If admin was not authenticated and teacher is not approved,
+          // closing the admin QR modal MUST immediately return to the phone registration gate!
+          if (!isAdminLoggedIn && (!license || license.status !== 'approved')) {
+            setIsPhoneRegisterOpen(true);
+          }
+        }}
         onSuccess={() => {
           setIsAdminQrModalOpen(false);
           setIsAdminLoggedIn(true);
